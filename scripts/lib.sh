@@ -59,3 +59,47 @@ reset_plugin() {
   git -C "$ROOT" restore -- example/plugin-vault >/dev/null 2>&1 || true
   git -C "$ROOT" clean -fdq -- example/plugin-vault >/dev/null 2>&1 || true
 }
+
+# --- plugin-in-headless-Obsidian helpers (shared by smoke-plugin + screenshot) ---
+
+OG_PLUGIN_ID="obsidian-guardian"
+
+# Run the Obsidian CLI inside the plugin-test container.
+plugin_obs() { docker compose -f "$PLUGIN_COMPOSE_FILE" exec -T obsidian obsidian "$@"; }
+
+plugin_ready() { plugin_obs version >/dev/null 2>&1; }
+
+# Copy the freshly built plugin into the (mounted) test vault.
+install_plugin() {
+  local dest="$PLUGIN_VAULT/.obsidian/plugins/$OG_PLUGIN_ID"
+  mkdir -p "$dest"
+  cp "$ROOT"/packages/plugin/dist/main.js "$dest/"
+  cp "$ROOT"/packages/plugin/dist/manifest.json "$dest/"
+  cp "$ROOT"/packages/plugin/dist/styles.css "$dest/"
+}
+
+# Enable + load the plugin once. The container boots in Restricted Mode, so set
+# the `enable-plugin-<appId>` localStorage master switch directly, rescan, and
+# enable. Idempotent — meant to be retried (e.g. `wait_for 60 plugin_enable_once`)
+# because `obs version` can report ready a beat before the plugins API is.
+plugin_enable_once() {
+  plugin_obs eval "code=(async()=>{localStorage.setItem('enable-plugin-'+app.appId,'true');await app.plugins.loadManifests();await app.plugins.enablePlugin('$OG_PLUGIN_ID');return 'ok'})()" \
+    >/dev/null 2>&1 || true
+  plugin_obs eval "code=app.plugins.plugins['$OG_PLUGIN_ID'] ? 'LOADED' : 'MISSING'" \
+    2>/dev/null | grep -q LOADED
+}
+
+# Screenshot the running app to a host path (routed through the mounted vault,
+# the only shared dir). Dismisses any first-open trust modal first.
+plugin_screenshot() {
+  local out="${1:-$ROOT/screenshots/plugin-$(date +%Y%m%d-%H%M%S).png}"
+  plugin_obs eval "code=document.querySelectorAll('.modal-close-button').forEach(b=>b.click())" \
+    >/dev/null 2>&1 || true
+  plugin_obs dev:screenshot "path=/vaults/plugin-test/_OG/__shot.png" >/dev/null 2>&1 || true
+  if [ -f "$PLUGIN_VAULT/_OG/__shot.png" ]; then
+    mkdir -p "$(dirname "$out")"
+    mv "$PLUGIN_VAULT/_OG/__shot.png" "$out"
+    return 0
+  fi
+  return 1
+}

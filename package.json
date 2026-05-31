@@ -11,6 +11,7 @@
     "test:smoke": "bash scripts/smoke.sh",
     "test:docker": "bash scripts/smoke-docker.sh",
     "test:plugin": "bash scripts/smoke-plugin.sh",
+    "screenshot:plugin": "bash scripts/screenshot-plugin.sh",
     "test:all": "pnpm test && pnpm test:smoke",
     "demo:up": "PUID=$(id -u) PGID=$(id -g) docker compose -f docker-compose.example.yaml up --build",
     "demo:down": "docker compose -f docker-compose.example.yaml down",

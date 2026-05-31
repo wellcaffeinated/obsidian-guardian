@@ -56,7 +56,11 @@ End-to-end smoke tests (`scripts/`, shell):
   example vault via the real compose file, edits a file, asserts the review note updates and is
   written back host-owned, and that `docker compose exec guardian og bless` runs as the host
   user and refreshes the note. Needs the docker daemon.
+- `pnpm test:plugin` — full plugin path: builds + loads the plugin in headless Obsidian
+  (`obsidian-headless-container`), drives it over `docker exec`, asserts load/refresh/bless. Needs docker.
 - `pnpm test:all` — `pnpm test && pnpm test:smoke` (the no-docker gate).
+- `pnpm screenshot:plugin [out.png]` — capture the plugin's review panel running in headless
+  Obsidian (default `screenshots/plugin-<timestamp>.png`); brings the container up / hot-reloads, leaves it running.
 - Demo helpers: `pnpm demo:up` / `pnpm demo:down` / `pnpm demo:reset`.
 
 **Each smoke pre-cleans before it runs** (host smoke wipes its temp workspace; `test:docker`/

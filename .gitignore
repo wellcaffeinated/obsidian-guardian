@@ -53,3 +53,14 @@ config
 example/.gitdir/*
 !example/.gitdir/.gitkeep
 example/vaults/**/_OG/
+
+# plugin-test vault: keep the seed (notes + community-plugins.json + plugins/.gitkeep),
+# ignore the copied plugin build, the review output, and Obsidian's runtime state.
+example/plugin-vault/_OG/
+example/plugin-vault/.obsidian/plugins/obsidian-guardian/*
+!example/plugin-vault/.obsidian/plugins/obsidian-guardian/.gitkeep
+example/plugin-vault/.obsidian/*.json
+!example/plugin-vault/.obsidian/community-plugins.json
+
+# plugin screenshots
+screenshots/

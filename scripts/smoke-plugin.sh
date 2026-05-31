@@ -20,8 +20,8 @@ export PUID PGID
 
 PLUGIN_DIR="$PLUGIN_VAULT/.obsidian/plugins/obsidian-guardian"
 
-# Run the Obsidian CLI inside the container.
-obs() { docker compose -f "$PLUGIN_COMPOSE_FILE" exec -T obsidian obsidian "$@"; }
+# Run the Obsidian CLI inside the container (shared helper from lib.sh).
+obs() { plugin_obs "$@"; }
 
 trap reset_plugin EXIT
 log "pre-clean: reset the plugin-test vault"
@@ -29,32 +29,20 @@ reset_plugin
 
 log "build the plugin and copy it into the vault"
 pnpm --filter @obsidian-guardian/plugin build >/dev/null
-mkdir -p "$PLUGIN_DIR"
-cp "$ROOT"/packages/plugin/dist/main.js "$PLUGIN_DIR/"
-cp "$ROOT"/packages/plugin/dist/manifest.json "$PLUGIN_DIR/"
-cp "$ROOT"/packages/plugin/dist/styles.css "$PLUGIN_DIR/"
+install_plugin
 assert_file "$PLUGIN_DIR/main.js"
 
 log "start headless Obsidian"
 docker compose -f "$PLUGIN_COMPOSE_FILE" up -d >/dev/null
 
 log "wait for Obsidian to come up"
-obsidian_ready() { obs version >/dev/null 2>&1; }
-wait_for 180 obsidian_ready || fail "Obsidian did not become ready within 180s"
+wait_for 180 plugin_ready || fail "Obsidian did not become ready within 180s"
 pass "Obsidian is up"
 
-# The container defaults to Restricted Mode (community plugins off). The master
-# switch is the `enable-plugin-<appId>` localStorage flag; set it directly (so
-# the trust dialog doesn't gate us), rescan manifests, and load our plugin.
-# `obs version` can succeed a moment before the plugins API is fully ready, so
-# re-run the enable each poll until the plugin actually registers (idempotent).
+# The container defaults to Restricted Mode; plugin_enable_once (lib.sh) flips the
+# localStorage master switch + enables the plugin, retried until it registers.
 log "enable community plugins and load obsidian-guardian"
-enable_and_check() {
-  obs eval "code=(async()=>{localStorage.setItem('enable-plugin-'+app.appId,'true');await app.plugins.loadManifests();await app.plugins.enablePlugin('obsidian-guardian');return 'ok'})()" >/dev/null 2>&1 || true
-  obs eval "code=app.plugins.plugins['obsidian-guardian'] ? 'LOADED' : 'MISSING'" \
-    2>/dev/null | grep -q LOADED
-}
-if ! wait_for 60 enable_and_check; then
+if ! wait_for 60 plugin_enable_once; then
   log "plugin did not load — diagnostics follow"
   obs dev:errors 2>&1 || true
   fail "plugin obsidian-guardian did not load"
