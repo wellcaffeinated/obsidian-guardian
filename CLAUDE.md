@@ -54,7 +54,8 @@ End-to-end smoke tests (`scripts/`, shell):
   No docker; seconds.
 - `pnpm test:docker` — full container path: builds the image, runs the watcher against the
   example vault via the real compose file, edits a file, asserts the review note updates and is
-  written back host-owned. Needs the docker daemon.
+  written back host-owned, and that `docker compose exec guardian og bless` runs as the host
+  user and refreshes the note. Needs the docker daemon.
 - `pnpm test:all` — `pnpm test && pnpm test:smoke` (the no-docker gate).
 - Demo helpers: `pnpm demo:up` / `pnpm demo:down` / `pnpm demo:reset`.
 
@@ -106,16 +107,17 @@ Phasing (de-risk hard logic in the easy environment first):
     - `refresh()` returns `Status` (slightly richer than the plan's `void`) for adapter/test convenience.
   - Known follow-ups (not blockers): status hashes every non-ignored file each call (fine for a vault,
     optimise with a stat cache later); rename detection is exact-content only.
-- [x] **Phase 1 — CLI + container.** Thin CLI over the engine, `watch` mode (chokidar). Doubles as Roastery service. **✅ green: 21/21 tests, typecheck, lint, knip, build; demo verified end-to-end in Docker.**
+- [x] **Phase 1 — CLI + container.** Thin CLI over the engine, `watch` mode (chokidar). Doubles as Roastery service. **✅ green: 24/24 tests (17 engine + 7 cli), typecheck, lint, knip, build; demo + `test:smoke` + `test:docker` verified end-to-end.**
   - [x] `packages/cli` scaffold (tsdown two-entry: `index.ts` lib + `cli.ts` bin with shebang; vitest aliases engine→src; tsconfig paths→engine src; isolatedDeclarations build).
   - [x] `config.ts` — `resolveConfig` (flag → `OG_*` env → default; git-dir defaults to sibling `<vault>.gitdir`; asserts git-dir is outside the vault).
   - [x] `commands.ts` — `createEngine` (auto-onboards, idempotent) + `formatStatus` (terminal summary).
   - [x] `watch.ts` — `runWatch`: chokidar over the vault, debounced `refresh()`, serialized (running/dirty lock), **ignores its own `_OG/` writes** (no refresh loop), `--poll` for bind-mount reliability.
-  - [x] `cli.ts` — `node:util.parseArgs` dispatch for `onboard/status/refresh/bless/revert/rollback/tag/watch`; `--json` status; `--machine-id`/`--review-folder` overrides; SIGINT/SIGTERM clean stop.
-  - [x] Tests: config precedence + outside-vault guard; `formatStatus`; watch writes note on initial pass + after a change; watch never reacts to its own output. Engine: per-machine note name shape.
-  - [x] Container: root `Dockerfile` (node:22-slim, corepack pnpm + `gosu`, build workspace), `docker-entrypoint.sh` (linux-server PUID/PGID: start root, chown gitdir, `exec gosu` to host user), default `CMD watch --poll`; `.dockerignore`.
-  - [x] `docker-compose.example.yaml` + `example/` demo: seed vault at `example/vaults/demo`, git-dir bind-mounted **outside** the vault at `example/.gitdir` (tracked `.gitkeep`, contents ignored), `_OG/` ignored, `PUID/PGID` (default 1000) so notes are written host-owned, host `/etc/machine-id` mounted read-only so the review filename keys to the host (not the ephemeral container).
-  - [x] Root `og` script (`pnpm og <cmd>`) drives the demo vault from the host for bless/revert/rollback/tag.
+  - [x] `cli.ts` — `node:util.parseArgs` dispatch for `onboard/status/refresh/bless/revert/rollback/tag/watch`; `--json` status; `--replica-id`/`--review-folder` overrides; SIGINT/SIGTERM clean stop.
+  - [x] Tests: config precedence + outside-vault guard; `formatStatus`; watch writes note on initial pass + after a change; watch never reacts to its own output. Engine: per-replica note name (shape, persistence across instances, differs per gitDir, explicit-id override).
+  - [x] Container: root `Dockerfile` (node:22-slim, corepack pnpm + `gosu`, build workspace), `docker-entrypoint.sh` (start root, chown gitdir, then `exec og`) + `docker-og.sh` → `/usr/local/bin/og` (the gosu drop to PUID/PGID; also the short command for `docker compose exec`), default `CMD watch --poll`; `.dockerignore`.
+  - [x] `docker-compose.example.yaml` + `example/` demo: seed vault at `example/vaults/demo`, git-dir bind-mounted **outside** the vault at `example/.gitdir` (tracked `.gitkeep`, contents ignored), `_OG/` ignored, `PUID/PGID` (default 1000) so notes are written host-owned. (No `/etc/machine-id` mount — the review filename is keyed to the per-replica id persisted in the gitDir.)
+  - [x] Root `og` script (`pnpm og <cmd>`, host Node) drives the demo vault from the host for bless/revert/rollback/tag — distinct from the in-image `og` shim.
+  - [x] Smoke scripts (`scripts/`, shell): `test:smoke` (host CLI lifecycle, no docker), `test:docker` (container watch + `exec og bless`), shared `lib.sh` (assert/wait_for/reset_demo); each pre-cleans so a crashed run can't poison the next.
   - Notable Phase-1 decisions:
     - Arg parsing via **built-in `node:util.parseArgs`** (zero deps); only runtime dep added is `chokidar` v4.
     - Watcher **must** ignore the review folder or writing the note retriggers refresh forever — covered by a regression test.
