@@ -1,7 +1,7 @@
 import type { Author } from './types'
 
 /** Default folder (vault-relative) for review artifacts. */
-export const DEFAULT_REVIEW_FOLDER = '_Review'
+export const DEFAULT_REVIEW_FOLDER = '_OG'
 
 /** Default branch name used as the advanceable baseline marker. */
 export const DEFAULT_MARKER = 'baseline'

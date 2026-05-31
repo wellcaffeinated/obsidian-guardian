@@ -58,4 +58,10 @@ export interface EngineConfig {
   ignore?: string[]
   /** Identity recorded on bless/baseline commits. */
   author?: Author
+  /**
+   * Stable per-machine id. The review note is named `changes-<hash>.md` from it
+   * so a synced vault reviewed on multiple devices never collides on one file.
+   * Defaults to the OS machine-id (or hostname).
+   */
+  machineId?: string
 }

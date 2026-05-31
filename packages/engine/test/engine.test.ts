@@ -161,22 +161,27 @@ describe('refresh', () => {
     await write(vault, 'new.md', 'fresh\n')
     const status = await engine.refresh()
     const note = await readFile(
-      join(vault, '_Review', 'Pending Review.md'),
+      join(vault, '_OG', engine.reviewNoteName),
       'utf8',
     )
     expect(note).toContain('Pending review')
     expect(note).toContain('[[new]]')
     // the review folder must never show up as its own pending change
     expect(status.changes.map((c) => c.path)).not.toContain(
-      '_Review/Pending Review.md',
+      `_OG/${engine.reviewNoteName}`,
     )
+  })
+
+  it('names the review note per-machine (changes-<hash>.md)', async () => {
+    const { engine } = await freshEngine()
+    expect(engine.reviewNoteName).toMatch(/^changes-[0-9a-f]{12}\.md$/)
   })
 
   it('renders a clean note when nothing is pending', async () => {
     const { engine, vault } = await freshEngine({ 'note.md': 'hi\n' })
     await engine.refresh()
     const note = await readFile(
-      join(vault, '_Review', 'Pending Review.md'),
+      join(vault, '_OG', engine.reviewNoteName),
       'utf8',
     )
     expect(note).toContain('status: blessed')

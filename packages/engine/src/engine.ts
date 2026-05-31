@@ -20,11 +20,9 @@ import {
   walkChanges,
   writeTag,
 } from './git-ops'
+import { defaultMachineId, reviewNoteName } from './machine-id'
 import { renderReviewNote } from './review-note'
 import type { Author, ChangeEntry, EngineConfig, Status } from './types'
-
-/** Filename of the generated review note inside the review folder. */
-export const REVIEW_NOTE_NAME = 'Pending Review.md'
 
 const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
 const MANAGED_END = '# <<< obsidian-guardian managed <<<'
@@ -56,6 +54,8 @@ export class ReviewEngine {
   private readonly ignoreGlobs: string[]
   private readonly author: Author
   private readonly matcher: Ignore
+  /** Filename of the generated review note (per-machine: `changes-<hash>.md`). */
+  readonly reviewNoteName: string
 
   constructor(config: EngineConfig) {
     this.vaultPath = config.vaultPath
@@ -63,6 +63,7 @@ export class ReviewEngine {
     this.reviewFolder = config.reviewFolder ?? DEFAULT_REVIEW_FOLDER
     this.markerRef = config.markerRef ?? DEFAULT_MARKER
     this.author = config.author ?? DEFAULT_AUTHOR
+    this.reviewNoteName = reviewNoteName(config.machineId ?? defaultMachineId())
     this.ignoreGlobs = [
       ...DEFAULT_IGNORE,
       ...(config.ignore ?? []),
@@ -118,7 +119,7 @@ export class ReviewEngine {
     const dir = join(this.vaultPath, this.reviewFolder)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(
-      join(dir, REVIEW_NOTE_NAME),
+      join(dir, this.reviewNoteName),
       renderReviewNote(status, this.vaultName),
     )
     return status
