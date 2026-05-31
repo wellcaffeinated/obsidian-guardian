@@ -57,6 +57,19 @@ describe('onboard', () => {
     await engine.onboard() // second call must not advance the marker
     expect((await engine.status()).marker).toBe(before)
   })
+
+  it('reports whether it freshly initialised', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'guardian-'))
+    tmpRoots.push(root)
+    const vault = join(root, 'vault')
+    await write(vault, 'note.md', 'hi\n')
+    const engine = new ReviewEngine({
+      vaultPath: vault,
+      gitDir: join(root, 'gitdb'),
+    })
+    expect(await engine.onboard()).toBe(true) // first ever → fresh
+    expect(await engine.onboard()).toBe(false) // existing baseline → not fresh
+  })
 })
 
 describe('status', () => {

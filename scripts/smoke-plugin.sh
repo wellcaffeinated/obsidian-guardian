@@ -55,6 +55,12 @@ wait_for 30 note_written || fail "review note was not written within 30s"
 NOTE="$(ls "$PLUGIN_VAULT"/_OG/changes-*.md | head -1)"
 pass "review note written: ${NOTE#"$ROOT"/}"
 
+log "wait for the first-activation auto-bless to settle the baseline"
+sleep 5   # the plugin advances the baseline ~3s after a fresh onboard
+note_clean() { grep -Eq 'status: blessed|Nothing pending' "$NOTE"; }
+wait_for 20 note_clean || fail "review did not settle to a clean baseline after first activation"
+pass "first activation settled to a clean baseline (no .obsidian self-noise)"
+
 log "open the panel and screenshot it"
 obs eval "code=app.commands.executeCommandById('obsidian-guardian:open-review-panel')" >/dev/null 2>&1 || true
 sleep 1

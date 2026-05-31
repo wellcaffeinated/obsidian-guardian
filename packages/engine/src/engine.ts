@@ -109,13 +109,18 @@ export class ReviewEngine {
    * Initialise the repo if absent, seed the managed `info/exclude`, and set the
    * baseline marker to the current state. Idempotent: re-running only refreshes
    * the managed ignore block, never advancing the marker.
+   *
+   * Returns `true` when it freshly initialised the repo (the first-ever onboard
+   * for this gitDir), `false` when an existing baseline was found. Adapters use
+   * this to do one-time first-activation work (e.g. settling the host app's own
+   * config writes that land just after the baseline).
    */
-  async onboard(): Promise<void> {
+  async onboard(): Promise<boolean> {
     const existing = await resolveRef(this.ctx)
     if (existing) {
       this.seedExclude()
       await this.ensureReviewNoteName()
-      return
+      return false
     }
     await init(this.ctx)
     this.seedExclude()
@@ -123,6 +128,7 @@ export class ReviewEngine {
     // Empty commit first so the marker resolves, then capture current state.
     await commit(this.ctx, this.author, 'chore: initialize baseline')
     await this.commitAll('chore: baseline')
+    return true
   }
 
   /** Compute pending changes relative to the baseline marker. */

@@ -20,6 +20,12 @@ import {
 } from './watcher'
 
 /**
+ * After a first-ever onboard, wait this long for the host app's own startup
+ * config writes to land before advancing the baseline once (see initEngine).
+ */
+const FIRST_BLESS_DELAY_MS = 3000
+
+/**
  * Obsidian adapter over the pure `ReviewEngine`. Desktop-only: the engine reads
  * the vault via Node `fs` (Electron) and keeps its git database under OS
  * app-data, outside the synced tree.
@@ -35,6 +41,7 @@ export default class ObsidianGuardianPlugin
   private reviewFolder = DEFAULT_SETTINGS.reviewFolder
   private statusBarEl: HTMLElement | null = null
   private debouncer: Debouncer | null = null
+  private firstBlessTimer: ReturnType<typeof setTimeout> | null = null
   private readonly serializedRefresh = createSerializedRefresh(() =>
     this.doRefresh(),
   )
@@ -116,6 +123,7 @@ export default class ObsidianGuardianPlugin
 
   override onunload(): void {
     this.debouncer?.cancel()
+    if (this.firstBlessTimer) clearTimeout(this.firstBlessTimer)
   }
 
   // --- ReviewController -----------------------------------------------------
@@ -179,6 +187,10 @@ export default class ObsidianGuardianPlugin
       new Notice('Obsidian Guardian requires a desktop vault.')
       return
     }
+    if (this.firstBlessTimer) {
+      clearTimeout(this.firstBlessTimer)
+      this.firstBlessTimer = null
+    }
     try {
       const config = resolvePluginConfig({
         vaultPath: adapter.getBasePath(),
@@ -187,12 +199,36 @@ export default class ObsidianGuardianPlugin
       })
       this.reviewFolder = config.reviewFolder
       const engine = new ReviewEngine(config)
-      await engine.onboard()
+      const fresh = await engine.onboard()
       this.engine = engine
       await this.refresh()
+      // On the very first onboard the baseline is captured before the host app
+      // finishes writing its own config (e.g. `.obsidian/core-plugins.json`),
+      // so those self-writes show up as pending. Let them settle, then advance
+      // the baseline once so the first review is honest. Scoped to first
+      // activation only — later loads find an existing marker and skip this.
+      if (fresh) this.scheduleFirstBless()
     } catch (err) {
       this.engine = null
       this.reportError('Initialisation failed', err)
+    }
+  }
+
+  private scheduleFirstBless(): void {
+    if (this.firstBlessTimer) clearTimeout(this.firstBlessTimer)
+    this.firstBlessTimer = setTimeout(() => {
+      this.firstBlessTimer = null
+      void this.firstBless()
+    }, FIRST_BLESS_DELAY_MS)
+  }
+
+  private async firstBless(): Promise<void> {
+    if (!this.engine) return
+    try {
+      await this.engine.bless()
+      await this.refresh()
+    } catch (err) {
+      this.reportError('Initial baseline bless failed', err)
     }
   }
 

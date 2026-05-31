@@ -9,7 +9,8 @@
       "!.agents",
       "!**/node_modules",
       "!.mcp.json",
-      "!skills-lock.json"
+      "!skills-lock.json",
+      "!**/.obsidian"
     ]
   },
   "assist": {
