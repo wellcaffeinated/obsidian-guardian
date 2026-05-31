@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+example/.gitdir
+example/vaults/**/_OG
+coverage
+*.log

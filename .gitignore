@@ -48,3 +48,8 @@ config
 .profile
 .ripgreprc
 .mcp.json
+
+# example demo artifacts (keep the gitdir folder, ignore its contents + review output)
+example/.gitdir/*
+!example/.gitdir/.gitkeep
+example/vaults/**/_OG/

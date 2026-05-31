@@ -1,0 +1,28 @@
+# Demo: watch ./example/vaults/demo and regenerate its review note on change.
+#
+#   docker compose -f docker-compose.example.yaml up --build
+#
+# Then edit any file under ./example/vaults/demo and watch
+# ./example/vaults/demo/_Review/Pending Review.md update.
+services:
+  guardian:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Review notes are written back to the host as this user (your `id -u`/`id
+      # -g`), not root. Defaults assume a single-user box; override per host:
+      #   PUID=$(id -u) PGID=$(id -g) docker compose -f docker-compose.example.yaml up
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    volumes:
+      # The vault (work-tree) — edits here are reviewed, review note written back.
+      - ./example/vaults/demo:/vault
+      # The git database — OUTSIDE the vault, so it never syncs. Host-visible
+      # for inspection; survives restarts.
+      - ./example/.gitdir:/gitdir
+      # The host machine-id, so the review file (`changes-<hash>.md`) is keyed to
+      # this computer — not the ephemeral container id. (systemd hosts only.)
+      - /etc/machine-id:/etc/machine-id:ro
+    command: ["watch", "--poll", "--debounce", "300"]
+    init: true
