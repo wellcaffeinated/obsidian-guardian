@@ -1,5 +1,5 @@
 export { ReviewEngine } from './engine'
-export { defaultMachineId, reviewNoteName } from './machine-id'
+export { readOrCreateReplicaId, reviewNoteName } from './replica-id'
 export { renderReviewNote } from './review-note'
 export type {
   Author,

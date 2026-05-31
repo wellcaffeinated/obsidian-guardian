@@ -20,7 +20,7 @@ import {
   walkChanges,
   writeTag,
 } from './git-ops'
-import { defaultMachineId, reviewNoteName } from './machine-id'
+import { readOrCreateReplicaId, reviewNoteName } from './replica-id'
 import { renderReviewNote } from './review-note'
 import type { Author, ChangeEntry, EngineConfig, Status } from './types'
 
@@ -54,8 +54,8 @@ export class ReviewEngine {
   private readonly ignoreGlobs: string[]
   private readonly author: Author
   private readonly matcher: Ignore
-  /** Filename of the generated review note (per-machine: `changes-<hash>.md`). */
-  readonly reviewNoteName: string
+  private readonly configReplicaId: string | undefined
+  private resolvedReviewNoteName: string | undefined
 
   constructor(config: EngineConfig) {
     this.vaultPath = config.vaultPath
@@ -63,7 +63,7 @@ export class ReviewEngine {
     this.reviewFolder = config.reviewFolder ?? DEFAULT_REVIEW_FOLDER
     this.markerRef = config.markerRef ?? DEFAULT_MARKER
     this.author = config.author ?? DEFAULT_AUTHOR
-    this.reviewNoteName = reviewNoteName(config.machineId ?? defaultMachineId())
+    this.configReplicaId = config.replicaId
     this.ignoreGlobs = [
       ...DEFAULT_IGNORE,
       ...(config.ignore ?? []),
@@ -84,6 +84,28 @@ export class ReviewEngine {
     path.length > 0 && this.matcher.ignores(path)
 
   /**
+   * Filename of the generated review note for this replica: `changes-<hash>.md`,
+   * derived from a per-gitDir id. Valid after {@link onboard} (or the first
+   * {@link refresh}); throws if read before the id has been resolved.
+   */
+  get reviewNoteName(): string {
+    if (this.resolvedReviewNoteName === undefined) {
+      throw new Error('reviewNoteName is available after onboard()')
+    }
+    return this.resolvedReviewNoteName
+  }
+
+  /** Resolve (once) and cache this replica's review-note filename. */
+  private async ensureReviewNoteName(): Promise<string> {
+    if (this.resolvedReviewNoteName === undefined) {
+      const replicaId =
+        this.configReplicaId ?? (await readOrCreateReplicaId(this.gitDir))
+      this.resolvedReviewNoteName = reviewNoteName(replicaId)
+    }
+    return this.resolvedReviewNoteName
+  }
+
+  /**
    * Initialise the repo if absent, seed the managed `info/exclude`, and set the
    * baseline marker to the current state. Idempotent: re-running only refreshes
    * the managed ignore block, never advancing the marker.
@@ -92,10 +114,12 @@ export class ReviewEngine {
     const existing = await resolveRef(this.ctx)
     if (existing) {
       this.seedExclude()
+      await this.ensureReviewNoteName()
       return
     }
     await init(this.ctx)
     this.seedExclude()
+    await this.ensureReviewNoteName()
     // Empty commit first so the marker resolves, then capture current state.
     await commit(this.ctx, this.author, 'chore: initialize baseline')
     await this.commitAll('chore: baseline')
@@ -118,10 +142,8 @@ export class ReviewEngine {
     const status = await this.status()
     const dir = join(this.vaultPath, this.reviewFolder)
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(
-      join(dir, this.reviewNoteName),
-      renderReviewNote(status, this.vaultName),
-    )
+    const name = await this.ensureReviewNoteName()
+    fs.writeFileSync(join(dir, name), renderReviewNote(status, this.vaultName))
     return status
   }
 

@@ -24,7 +24,7 @@ Options:
   --vault <path>          Vault folder (default: $OG_VAULT or cwd)
   --git-dir <path>        Git database, outside the vault (default: <vault>.gitdir)
   --review-folder <name>  Review-artifact folder (default: _OG)
-  --machine-id <id>       Override the per-machine review filename seed
+  --replica-id <id>       Override the per-replica review filename seed
   --json                  Machine-readable JSON output (status)
   --poll                  Use polling for fs events (watch; bind-mount safe)
   --debounce <ms>         Debounce window for watch refreshes (default: 300)
@@ -37,7 +37,7 @@ const { values, positionals } = parseArgs({
     vault: { type: 'string' },
     'git-dir': { type: 'string' },
     'review-folder': { type: 'string' },
-    'machine-id': { type: 'string' },
+    'replica-id': { type: 'string' },
     json: { type: 'boolean', default: false },
     poll: { type: 'boolean', default: false },
     debounce: { type: 'string' },
@@ -52,7 +52,7 @@ function configInput(): ConfigInput {
     vault: values.vault,
     gitDir: values['git-dir'],
     reviewFolder: values['review-folder'],
-    machineId: values['machine-id'],
+    replicaId: values['replica-id'],
   }
 }
 
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
     case 'watch': {
       const debounceMs = values.debounce ? Number(values.debounce) : undefined
       info(
-        `watching ${config.vaultPath} — review note at ${config.reviewFolder}/`,
+        `watching ${config.vaultPath} — review note at ${config.reviewFolder}/${engine.reviewNoteName}`,
       )
       const handle = await runWatch(engine, config, {
         poll: values.poll,

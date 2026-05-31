@@ -19,8 +19,8 @@ the review note updates:
 example/vaults/demo/_OG/changes-<hash>.md
 ```
 
-The `_OG/` folder holds review artifacts; the `<hash>` is derived from this
-computer's machine-id, so two devices reviewing the same synced vault each write
+The `_OG/` folder holds review artifacts; the `<hash>` identifies this *replica*
+(this git database), so two devices reviewing the same synced vault each write
 their own file and never collide. The note lists every file that changed since
 the last *blessed* baseline, with `+x -y` line counts and tappable
 `[[wikilinks]]` (so it's reviewable in Obsidian on mobile too).
@@ -53,8 +53,9 @@ against the new baseline.
 - The vault `example/vaults/demo/` is bind-mounted to `/vault` in the container.
 - The git database is kept **outside** the vault at `example/.gitdir/` (mounted
   to `/gitdir`), so nothing git-related ever lives in the synced vault tree.
-- The host `/etc/machine-id` is mounted read-only so the review filename is keyed
-  to *this computer*, not the ephemeral container.
+- The review filename is keyed to a per-replica id (a random UUID) persisted at
+  `example/.gitdir/obsidian-guardian/replica-id` — stable across restarts, and
+  distinct per git database, with no host probing.
 - `_OG/` and `example/.gitdir/` are git-ignored in this repo; only the seed vault
   files are committed.
 - The watcher polls (`--poll`) so it reliably sees host edits across the

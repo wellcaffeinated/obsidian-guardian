@@ -2,7 +2,11 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ReviewEngine } from '@obsidian-guardian/engine'
+import {
+  type EngineConfig,
+  ReviewEngine,
+  reviewNoteName,
+} from '@obsidian-guardian/engine'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpRoots: string[] = []
@@ -26,6 +30,7 @@ async function write(
 
 async function freshEngine(
   baseline: Record<string, string> = {},
+  config: Partial<EngineConfig> = {},
 ): Promise<{ engine: ReviewEngine; vault: string; gitdir: string }> {
   const root = await mkdtemp(join(tmpdir(), 'guardian-'))
   tmpRoots.push(root)
@@ -35,7 +40,11 @@ async function freshEngine(
   for (const [rel, content] of Object.entries(baseline)) {
     await write(vault, rel, content)
   }
-  const engine = new ReviewEngine({ vaultPath: vault, gitDir: gitdir })
+  const engine = new ReviewEngine({
+    vaultPath: vault,
+    gitDir: gitdir,
+    ...config,
+  })
   await engine.onboard()
   return { engine, vault, gitdir }
 }
@@ -172,11 +181,6 @@ describe('refresh', () => {
     )
   })
 
-  it('names the review note per-machine (changes-<hash>.md)', async () => {
-    const { engine } = await freshEngine()
-    expect(engine.reviewNoteName).toMatch(/^changes-[0-9a-f]{12}\.md$/)
-  })
-
   it('renders a clean note when nothing is pending', async () => {
     const { engine, vault } = await freshEngine({ 'note.md': 'hi\n' })
     await engine.refresh()
@@ -186,5 +190,37 @@ describe('refresh', () => {
     )
     expect(note).toContain('status: blessed')
     expect(note).toContain('Clean')
+  })
+})
+
+describe('replica id', () => {
+  it('names the review note per replica (changes-<hash>.md)', async () => {
+    const { engine } = await freshEngine()
+    expect(engine.reviewNoteName).toMatch(/^changes-[0-9a-f]{12}\.md$/)
+  })
+
+  it('persists the id in the gitDir so the name is stable across instances', async () => {
+    const { engine, vault, gitdir } = await freshEngine({ 'n.md': 'x\n' })
+    const first = engine.reviewNoteName
+    // a second engine over the same gitDir reuses the persisted id
+    const again = new ReviewEngine({ vaultPath: vault, gitDir: gitdir })
+    await again.onboard()
+    expect(again.reviewNoteName).toBe(first)
+    // the id lives in the gitDir (never the vault), so git ops can't see it
+    expect(existsSync(join(gitdir, 'obsidian-guardian', 'replica-id'))).toBe(
+      true,
+    )
+    expect(existsSync(join(vault, 'obsidian-guardian'))).toBe(false)
+  })
+
+  it('differs across replicas (different gitDirs)', async () => {
+    const a = await freshEngine()
+    const b = await freshEngine()
+    expect(a.engine.reviewNoteName).not.toBe(b.engine.reviewNoteName)
+  })
+
+  it('honours an explicit replicaId override', async () => {
+    const { engine } = await freshEngine({}, { replicaId: 'fixed-replica' })
+    expect(engine.reviewNoteName).toBe(reviewNoteName('fixed-replica'))
   })
 })

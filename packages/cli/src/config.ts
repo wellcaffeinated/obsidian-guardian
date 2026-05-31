@@ -17,8 +17,9 @@ export interface ConfigInput {
   reviewFolder?: string
   /** Extra ignore globs appended to the managed `info/exclude` block. */
   ignore?: string[]
-  /** Per-machine id for the review filename. Default: `$OG_MACHINE_ID` or OS id. */
-  machineId?: string
+  /** Per-replica id for the review filename. Default: `$OG_REPLICA_ID` or a
+   *  random id persisted in the gitDir. */
+  replicaId?: string
 }
 
 /** A fully-resolved {@link EngineConfig} with `reviewFolder` always set. */
@@ -59,6 +60,6 @@ export function resolveConfig(
     input.gitDir ?? env.OG_GIT_DIR ?? defaultGitDir(vaultPath),
   )
   assertOutsideVault(vaultPath, gitDir)
-  const machineId = input.machineId ?? env.OG_MACHINE_ID
-  return { vaultPath, gitDir, reviewFolder, ignore: input.ignore, machineId }
+  const replicaId = input.replicaId ?? env.OG_REPLICA_ID
+  return { vaultPath, gitDir, reviewFolder, ignore: input.ignore, replicaId }
 }

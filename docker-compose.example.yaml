@@ -19,10 +19,9 @@ services:
       # The vault (work-tree) — edits here are reviewed, review note written back.
       - ./example/vaults/demo:/vault
       # The git database — OUTSIDE the vault, so it never syncs. Host-visible
-      # for inspection; survives restarts.
+      # for inspection; survives restarts. The per-replica id keyed to the review
+      # filename (`changes-<hash>.md`) is persisted here too, so it is stable
+      # across restarts without probing the host.
       - ./example/.gitdir:/gitdir
-      # The host machine-id, so the review file (`changes-<hash>.md`) is keyed to
-      # this computer — not the ephemeral container id. (systemd hosts only.)
-      - /etc/machine-id:/etc/machine-id:ro
     command: ["watch", "--poll", "--debounce", "300"]
     init: true

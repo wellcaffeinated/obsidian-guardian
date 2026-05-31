@@ -59,9 +59,10 @@ export interface EngineConfig {
   /** Identity recorded on bless/baseline commits. */
   author?: Author
   /**
-   * Stable per-machine id. The review note is named `changes-<hash>.md` from it
-   * so a synced vault reviewed on multiple devices never collides on one file.
-   * Defaults to the OS machine-id (or hostname).
+   * Stable id for this replica (this gitDir / working copy). The review note is
+   * named `changes-<hash>.md` from it, so a synced vault reviewed from multiple
+   * replicas never collides on one file. Defaults to a random id persisted in
+   * the gitDir (`<gitDir>/obsidian-guardian/replica-id`).
    */
-  machineId?: string
+  replicaId?: string
 }

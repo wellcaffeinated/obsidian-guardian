@@ -104,9 +104,9 @@ Phasing (de-risk hard logic in the easy environment first):
     - Arg parsing via **built-in `node:util.parseArgs`** (zero deps); only runtime dep added is `chokidar` v4.
     - Watcher **must** ignore the review folder or writing the note retriggers refresh forever — covered by a regression test.
     - `--poll` defaulted in the demo: polling reliably sees host edits across the Docker bind-mount regardless of inotify propagation.
-    - **Review folder default `_OG`** (configurable via `--review-folder`/`OG_REVIEW_FOLDER`). **Review filename is per-machine: `changes-<12-hex>.md`**, hash of the OS machine-id (engine `machine-id.ts`; `defaultMachineId()` reads `/etc/machine-id`→`/var/lib/dbus/machine-id`→hostname), so a synced vault reviewed on multiple devices never collides on one file. Override seed via `--machine-id`/`OG_MACHINE_ID`/`EngineConfig.machineId`.
-    - Container drops root→host user the **linux-server way** (`gosu` + `PUID`/`PGID`), not a static compose `user:`. Verified: review note written back owned by the host user; filename matched the host machine-id hash via the `/etc/machine-id` mount.
-    - Demo verified live: container watch → host edit → debounced refresh → updated `_OG/changes-<hash>.md`; host `pnpm og bless`/`revert`/`rollback` work against the same git-dir.
+    - **Review folder default `_OG`** (configurable via `--review-folder`/`OG_REVIEW_FOLDER`). **Review filename is per-replica: `changes-<12-hex>.md`**, hash of a replica id. The id is a random UUID persisted at `<gitDir>/obsidian-guardian/replica-id` (engine `replica-id.ts`, `readOrCreateReplicaId`, exclusive `wx` create so concurrent fresh onboards converge). Resolved lazily at `onboard()` (gitDir must exist first); `ReviewEngine.reviewNoteName` is valid thereafter. Per-replica (= per-gitDir, 1:1 with vault), which is exactly the collision-avoidance unit — two replicas of one synced vault never share a file. No hardware probing, no OS branch, no container mount. Override the seed via `--replica-id`/`OG_REPLICA_ID`/`EngineConfig.replicaId`.
+    - Container drops root→host user the **linux-server way** (`gosu` + `PUID`/`PGID`), not a static compose `user:`. Verified: review note written back owned by the host user.
+    - Demo verified live: container watch → host edit → debounced refresh → updated `_OG/changes-<hash>.md`; filename stable across restart (persisted id), identical between container and host `pnpm og` over the shared gitDir; bless/revert/rollback all work.
 - [ ] **Phase 2 — Obsidian plugin.** Same engine; settings, native review panel, lifecycle, app-data wiring; community-store publish.
 - [ ] **Phase 3 — Optional.** Claude integration layer; watcher-enacts-checkboxes; plugin-on-headless.
 
@@ -121,5 +121,5 @@ adapter in `packages/cli` is the working reference.
 - git (not jj); own repo (coexists with Obsidian Git, no dependency on it).
 - Marker = a branch named `baseline`; `HEAD` always points at it. Pending = `statusMatrix` (workdir vs marker).
 - Ignores via `.git/info/exclude` (managed block), not a committed `.gitignore`. `.obsidian` plugins/settings tracked; `workspace*.json`/caches ignored.
-- Review note written into `_OG/` inside the vault (configurable; git-ignored, sync-synced) so `[[links]]` resolve on mobile. Filename `changes-<machine-hash>.md` — per-machine, to avoid cross-device sync conflicts on the same vault.
+- Review note written into `_OG/` inside the vault (configurable; git-ignored, sync-synced) so `[[links]]` resolve on mobile. Filename `changes-<replica-hash>.md` — **per-replica** (hash of a random id persisted in the gitDir), to avoid sync conflicts when the same vault is reviewed from multiple replicas/devices.
 - isomorphic-git in all adapters for behavioral parity.
