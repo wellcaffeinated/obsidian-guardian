@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ReviewEngine } from '@obsidian-bedrock/engine'
+import { ReviewEngine } from '@obsidian-guardian/engine'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpRoots: string[] = []
@@ -27,7 +27,7 @@ async function write(
 async function freshEngine(
   baseline: Record<string, string> = {},
 ): Promise<{ engine: ReviewEngine; vault: string; gitdir: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'bedrock-'))
+  const root = await mkdtemp(join(tmpdir(), 'guardian-'))
   tmpRoots.push(root)
   const vault = join(root, 'vault')
   const gitdir = join(root, 'gitdb')

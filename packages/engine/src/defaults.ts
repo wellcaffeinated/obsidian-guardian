@@ -8,8 +8,8 @@ export const DEFAULT_MARKER = 'baseline'
 
 /** Default identity recorded on bless/baseline commits. */
 export const DEFAULT_AUTHOR: Author = {
-  name: 'Obsidian Bedrock',
-  email: 'bedrock@localhost',
+  name: 'Obsidian Guardian',
+  email: 'guardian@localhost',
 }
 
 /**

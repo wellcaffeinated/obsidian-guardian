@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "paths": {
-      "@obsidian-bedrock/engine": ["./src/index.ts"]
+      "@obsidian-guardian/engine": ["./src/index.ts"]
     }
   },
   "include": ["src", "test", "*.config.ts"]

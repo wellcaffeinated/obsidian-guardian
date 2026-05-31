@@ -1,4 +1,4 @@
-# Obsidian Bedrock
+# Obsidian Guardian
 
 > **Agent vault review.** Let agents (Claude, etc.) edit an Obsidian vault, then review
 > exactly what changed since the last *blessed* state — a complete, trustworthy change list
@@ -46,7 +46,7 @@ packages/
 Root (run across all packages):
 - `pnpm build` · `pnpm test` · `pnpm typecheck` · `pnpm lint` · `pnpm format` · `pnpm knip`
 
-Per package (e.g. `packages/engine`): same scripts via `pnpm --filter @obsidian-bedrock/engine <script>`.
+Per package (e.g. `packages/engine`): same scripts via `pnpm --filter @obsidian-guardian/engine <script>`.
 
 ## Conventions
 

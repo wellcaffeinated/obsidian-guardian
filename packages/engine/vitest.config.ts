@@ -5,7 +5,7 @@ export default defineConfig({
     alias: {
       // Test against source for a fast iteration loop. The published artifact
       // is verified separately by `build` + `typecheck`.
-      '@obsidian-bedrock/engine': new URL('./src/index.ts', import.meta.url)
+      '@obsidian-guardian/engine': new URL('./src/index.ts', import.meta.url)
         .pathname,
     },
   },

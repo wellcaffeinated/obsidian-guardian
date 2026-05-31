@@ -26,8 +26,8 @@ import type { Author, ChangeEntry, EngineConfig, Status } from './types'
 /** Filename of the generated review note inside the review folder. */
 export const REVIEW_NOTE_NAME = 'Pending Review.md'
 
-const MANAGED_BEGIN = '# >>> obsidian-bedrock managed >>>'
-const MANAGED_END = '# <<< obsidian-bedrock managed <<<'
+const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
+const MANAGED_END = '# <<< obsidian-guardian managed <<<'
 
 /** Replace (or append) the engine-managed block in an `info/exclude` body. */
 function upsertManagedBlock(existing: string, lines: string[]): string {

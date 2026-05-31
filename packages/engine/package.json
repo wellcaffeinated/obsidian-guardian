@@ -1,8 +1,8 @@
 {
-  "name": "@obsidian-bedrock/engine",
+  "name": "@obsidian-guardian/engine",
   "version": "0.0.0",
   "type": "module",
-  "description": "Pure review engine for Obsidian Bedrock: git-backed pending/bless/revert over a vault, with zero Obsidian imports.",
+  "description": "Pure review engine for Obsidian Guardian: git-backed pending/bless/revert over a vault, with zero Obsidian imports.",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
