@@ -48,6 +48,22 @@ Root (run across all packages):
 
 Per package (e.g. `packages/engine`): same scripts via `pnpm --filter @obsidian-guardian/engine <script>`.
 
+End-to-end smoke tests (`scripts/`, shell):
+- `pnpm test:smoke` — drives the **built** CLI through onboard→status→refresh→revert→bless
+  against a throwaway temp vault (plus the outside-vault guard and `--replica-id` override).
+  No docker; seconds.
+- `pnpm test:docker` — full container path: builds the image, runs the watcher against the
+  example vault via the real compose file, edits a file, asserts the review note updates and is
+  written back host-owned. Needs the docker daemon.
+- `pnpm test:all` — `pnpm test && pnpm test:smoke` (the no-docker gate).
+- Demo helpers: `pnpm demo:up` / `pnpm demo:down` / `pnpm demo:reset`.
+
+**Each smoke pre-cleans before it runs** (host smoke wipes its temp workspace; `test:docker`/
+`demo:reset` reset the demo vault + gitDir to the committed state), so a crashed prior run never
+poisons the next. **Agents: run `pnpm test:smoke` to validate the built CLI before claiming it
+works** — it exercises the bundled binary + arg parsing that the Vitest suites (run against `src`)
+don't cover.
+
 ## Conventions
 
 - **Package manager: pnpm** (not npm/yarn/bun — this overrides the global bun preference for
