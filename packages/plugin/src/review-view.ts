@@ -13,10 +13,22 @@ import { describeStatus, shortMarker } from './format'
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
 
 /**
+ * Per-machine activation state. `loading` = engine still initialising;
+ * `inactive` = this machine has never been activated (no local history yet),
+ * so we render an explicit opt-in and touch nothing; `active` = onboarded here
+ * and reviewing normally.
+ */
+export type ActivationState = 'loading' | 'inactive' | 'active'
+
+/**
  * What the panel needs from the plugin. Keeps the view decoupled from the
  * concrete `Plugin` (and trivially fakeable in tests).
  */
 export interface ReviewController {
+  /** Whether this machine is loading / not-yet-activated / actively reviewing. */
+  getActivationState(): ActivationState
+  /** Explicitly begin reviewing on this machine (onboard the local history). */
+  activate(): Promise<void>
   /** The latest computed status, or null before the engine has initialised. */
   getStatus(): Status | null
   /** Recompute status + rewrite the review note. */
@@ -63,6 +75,12 @@ export class ReviewView extends ItemView {
     const root = this.contentEl
     root.empty()
     root.addClass('og-review')
+
+    if (this.controller.getActivationState() === 'inactive') {
+      this.renderInactive(root)
+      return
+    }
+
     const status = this.controller.getStatus()
 
     this.renderHeader(root, status)
@@ -80,6 +98,39 @@ export class ReviewView extends ItemView {
       return
     }
     this.renderList(root, status)
+  }
+
+  /**
+   * The not-yet-activated state. Reviewing is opt-in *per machine* so that two
+   * desktops syncing the same vault don't both silently spin up a git history
+   * and emit competing review notes. Until the user clicks Activate, the plugin
+   * writes nothing.
+   */
+  private renderInactive(root: HTMLElement): void {
+    const header = root.createDiv({ cls: 'og-review__header' })
+    header.createEl('h2', { text: 'Vault review' })
+    header.createSpan({
+      cls: 'og-review__meta',
+      text: 'not active on this machine',
+    })
+
+    root.createDiv({
+      cls: 'og-review__empty',
+      text:
+        'This machine isn’t reviewing this vault yet. Activating creates a ' +
+        'local change-history stored outside the vault, on this device only, ' +
+        'and starts tracking changes here. Other devices are unaffected — each ' +
+        'reviews independently.',
+    })
+
+    const actions = root.createDiv({ cls: 'og-review__actions' })
+    new ButtonComponent(actions)
+      .setButtonText('Start reviewing on this machine')
+      .setIcon('shield-check')
+      .setCta()
+      .onClick(() => {
+        void this.controller.activate()
+      })
   }
 
   private renderHeader(root: HTMLElement, status: Status | null): void {

@@ -31,6 +31,12 @@ else
 fi
 pass "plugin loaded"
 
+# Reviewing is opt-in per machine: activate so the panel shows the real review
+# UI (header/changes/bless) rather than the "start reviewing" opt-in screen.
+log "activate review on this machine"
+plugin_obs eval "code=app.commands.executeCommandById('$OG_PLUGIN_ID:activate')" >/dev/null 2>&1 || true
+sleep 2
+
 log "open the review panel and refresh"
 plugin_obs eval "code=app.commands.executeCommandById('$OG_PLUGIN_ID:open-review-panel')" >/dev/null 2>&1 || true
 plugin_obs eval "code=app.commands.executeCommandById('$OG_PLUGIN_ID:refresh')" >/dev/null 2>&1 || true

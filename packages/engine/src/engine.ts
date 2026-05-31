@@ -131,6 +131,16 @@ export class ReviewEngine {
     return true
   }
 
+  /**
+   * Whether this gitDir already holds an initialised baseline (i.e. a prior
+   * {@link onboard} ran for it). Pure check — never creates the repo — so
+   * adapters can gate first-time activation behind an explicit user action
+   * instead of silently onboarding on every machine that opens a synced vault.
+   */
+  async isOnboarded(): Promise<boolean> {
+    return (await resolveRef(this.ctx)) !== null
+  }
+
   /** Compute pending changes relative to the baseline marker. */
   async status(): Promise<Status> {
     const changes = await this.buildChanges()

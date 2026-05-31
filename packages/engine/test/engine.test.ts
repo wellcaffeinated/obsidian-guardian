@@ -70,6 +70,21 @@ describe('onboard', () => {
     expect(await engine.onboard()).toBe(true) // first ever → fresh
     expect(await engine.onboard()).toBe(false) // existing baseline → not fresh
   })
+
+  it('isOnboarded is false before onboard and true after, without creating state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'guardian-'))
+    tmpRoots.push(root)
+    const vault = join(root, 'vault')
+    await write(vault, 'note.md', 'hi\n')
+    const engine = new ReviewEngine({
+      vaultPath: vault,
+      gitDir: join(root, 'gitdb'),
+    })
+    expect(await engine.isOnboarded()).toBe(false) // pure check, no repo yet
+    expect(await engine.isOnboarded()).toBe(false) // still not created
+    await engine.onboard()
+    expect(await engine.isOnboarded()).toBe(true)
+  })
 })
 
 describe('status', () => {

@@ -95,18 +95,6 @@ export class GuardianSettingTab extends PluginSettingTab {
           .setValue(settings.authorEmail)
           .onChange((value) => persist(() => (settings.authorEmail = value))),
       )
-
-    new Setting(containerEl)
-      .setName('Replica id')
-      .setDesc(
-        'Advanced: overrides the per-replica review-note filename. Leave empty to use the id persisted in the git database.',
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder('auto')
-          .setValue(settings.replicaId)
-          .onChange((value) => persist(() => (settings.replicaId = value))),
-      )
   }
 
   override hide(): void {

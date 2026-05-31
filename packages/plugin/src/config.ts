@@ -22,8 +22,6 @@ export interface PluginSettings {
   authorName: string
   /** Commit author email recorded on bless. */
   authorEmail: string
-  /** Explicit per-replica id for the review filename. Empty = engine default (persisted). */
-  replicaId: string
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -33,7 +31,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   ignore: '',
   authorName: '',
   authorEmail: '',
-  replicaId: '',
 }
 
 /** A resolved {@link EngineConfig} with `reviewFolder` always set. */
@@ -103,6 +100,8 @@ export function resolvePluginConfig(args: {
     markerRef: settings.markerRef.trim() || DEFAULT_MARKER,
     ignore: ignore.length > 0 ? ignore : undefined,
     author,
-    replicaId: settings.replicaId.trim() || undefined,
+    // No replicaId here on purpose: a synced setting would make every machine
+    // share one review-note filename and collide. The engine's own per-gitDir
+    // persisted id keeps each machine isolated. (CLI keeps the advanced override.)
   }
 }

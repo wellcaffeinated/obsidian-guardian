@@ -93,6 +93,9 @@ plugin_enable_once() {
 # the only shared dir). Dismisses any first-open trust modal first.
 plugin_screenshot() {
   local out="${1:-$ROOT/screenshots/plugin-$(date +%Y%m%d-%H%M%S).png}"
+  # Ensure the target dir exists even if the plugin is inactive (it only creates
+  # `_OG/` after activation); the bind mount surfaces it inside the container.
+  mkdir -p "$PLUGIN_VAULT/_OG"
   plugin_obs eval "code=document.querySelectorAll('.modal-close-button').forEach(b=>b.click())" \
     >/dev/null 2>&1 || true
   plugin_obs dev:screenshot "path=/vaults/plugin-test/_OG/__shot.png" >/dev/null 2>&1 || true

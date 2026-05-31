@@ -60,7 +60,6 @@ describe('resolvePluginConfig', () => {
         ignore: 'drafts/\n*.tmp, scratch/',
         authorName: 'Agent',
         authorEmail: 'agent@example.com',
-        replicaId: 'fixed-id',
       }),
     })
     expect(cfg.gitDir).toBe('/elsewhere/db')
@@ -68,7 +67,9 @@ describe('resolvePluginConfig', () => {
     expect(cfg.markerRef).toBe('blessed')
     expect(cfg.ignore).toEqual(['drafts/', '*.tmp', 'scratch/'])
     expect(cfg.author).toEqual({ name: 'Agent', email: 'agent@example.com' })
-    expect(cfg.replicaId).toBe('fixed-id')
+    // The plugin never sets replicaId (it would sync and collide); the engine's
+    // own per-gitDir persisted id provides per-machine isolation instead.
+    expect(cfg.replicaId).toBeUndefined()
   })
 
   it('throws when the gitDir would sit inside the vault', () => {

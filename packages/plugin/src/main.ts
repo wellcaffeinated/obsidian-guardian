@@ -6,6 +6,7 @@ import {
   resolvePluginConfig,
 } from './config'
 import {
+  type ActivationState,
   ConfirmModal,
   type ReviewController,
   ReviewView,
@@ -37,6 +38,9 @@ export default class ObsidianGuardianPlugin
   settings: PluginSettings = { ...DEFAULT_SETTINGS }
 
   private engine: ReviewEngine | null = null
+  /** Onboarded-but-not-yet-activated engine, awaiting an explicit Activate. */
+  private dormantEngine: ReviewEngine | null = null
+  private activationState: ActivationState = 'loading'
   private lastStatus: Status | null = null
   private reviewFolder = DEFAULT_SETTINGS.reviewFolder
   private statusBarEl: HTMLElement | null = null
@@ -71,6 +75,13 @@ export default class ObsidianGuardianPlugin
       name: 'Open vault review',
       callback: () => {
         void this.activateView()
+      },
+    })
+    this.addCommand({
+      id: 'activate',
+      name: 'Start reviewing on this machine',
+      callback: () => {
+        void this.activate()
       },
     })
     this.addCommand({
@@ -128,8 +139,33 @@ export default class ObsidianGuardianPlugin
 
   // --- ReviewController -----------------------------------------------------
 
+  getActivationState(): ActivationState {
+    return this.activationState
+  }
+
   getStatus(): Status | null {
     return this.lastStatus
+  }
+
+  /**
+   * Explicit per-machine opt-in: onboard the dormant engine (creating the local
+   * history) and begin reviewing. No-op once active. Fresh onboards get the
+   * one-time first-bless so the host app's own startup writes don't pollute the
+   * first review.
+   */
+  async activate(): Promise<void> {
+    if (this.activationState === 'active' || !this.dormantEngine) return
+    const engine = this.dormantEngine
+    try {
+      const fresh = await engine.onboard()
+      this.engine = engine
+      this.dormantEngine = null
+      this.activationState = 'active'
+      await this.refresh()
+      if (fresh) this.scheduleFirstBless()
+    } catch (err) {
+      this.reportError('Activation failed', err)
+    }
   }
 
   refresh(): Promise<void> {
@@ -199,17 +235,28 @@ export default class ObsidianGuardianPlugin
       })
       this.reviewFolder = config.reviewFolder
       const engine = new ReviewEngine(config)
-      const fresh = await engine.onboard()
-      this.engine = engine
-      await this.refresh()
-      // On the very first onboard the baseline is captured before the host app
-      // finishes writing its own config (e.g. `.obsidian/core-plugins.json`),
-      // so those self-writes show up as pending. Let them settle, then advance
-      // the baseline once so the first review is honest. Scoped to first
-      // activation only — later loads find an existing marker and skip this.
-      if (fresh) this.scheduleFirstBless()
+      this.engine = null
+      // Reviewing is opt-in per machine: only resume automatically if this
+      // machine's (per-machine, app-data) gitDir already holds a baseline.
+      // Otherwise stay inactive and write nothing until the user activates —
+      // so a second synced desktop doesn't silently start a competing history.
+      if (await engine.isOnboarded()) {
+        await engine.onboard() // idempotent: re-seeds ignores, resolves note name
+        this.engine = engine
+        this.dormantEngine = null
+        this.activationState = 'active'
+        await this.refresh()
+      } else {
+        this.dormantEngine = engine
+        this.activationState = 'inactive'
+        this.lastStatus = null
+        this.updateViews()
+        this.renderStatusBar()
+      }
     } catch (err) {
       this.engine = null
+      this.dormantEngine = null
+      this.activationState = 'inactive'
       this.reportError('Initialisation failed', err)
     }
   }
@@ -278,6 +325,10 @@ export default class ObsidianGuardianPlugin
 
   private renderStatusBar(): void {
     if (!this.statusBarEl) return
+    if (this.activationState === 'inactive') {
+      this.statusBarEl.setText('OG: inactive')
+      return
+    }
     const status = this.lastStatus
     if (!status) {
       this.statusBarEl.setText('OG: —')

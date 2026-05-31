@@ -49,8 +49,16 @@ if ! wait_for 60 plugin_enable_once; then
 fi
 pass "plugin loaded"
 
-log "wait for the engine's initial review note (onboard + refresh on load)"
+log "review is opt-in per machine: assert nothing is written before activation"
 note_written() { ls "$PLUGIN_VAULT"/_OG/changes-*.md >/dev/null 2>&1; }
+sleep 3
+if note_written; then fail "plugin wrote a review note before explicit activation"; fi
+pass "plugin stayed inactive (no review note) until activated"
+
+log "activate review on this machine (explicit per-machine opt-in)"
+obs eval "code=app.commands.executeCommandById('obsidian-guardian:activate')" >/dev/null 2>&1 || true
+
+log "wait for the engine's initial review note (onboard + refresh after activation)"
 wait_for 30 note_written || fail "review note was not written within 30s"
 NOTE="$(ls "$PLUGIN_VAULT"/_OG/changes-*.md | head -1)"
 pass "review note written: ${NOTE#"$ROOT"/}"
