@@ -1,0 +1,37 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/docs",
+      "!.claude",
+      "!.agents",
+      "!**/node_modules",
+      "!.mcp.json",
+      "!skills-lock.json"
+    ]
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": { "recommended": true }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "asNeeded",
+      "quoteStyle": "single"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+# dependencies
+node_modules
+
+# output
+out
+dist
+docs
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# Environment artifacts (sandbox/container bind-mounts)
+HEAD
+objects
+refs
+hooks
+config
+.gitconfig
+.gitmodules
+.bashrc
+.bash_profile
+.zshrc
+.zprofile
+.profile
+.ripgreprc
+.mcp.json

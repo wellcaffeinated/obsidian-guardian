@@ -1,0 +1,43 @@
+{
+  "name": "@obsidian-bedrock/engine",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Pure review engine for Obsidian Bedrock: git-backed pending/bless/revert over a vault, with zero Obsidian imports.",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsdown --watch",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "diff": "^7.0.0",
+    "ignore": "^7.0.0",
+    "isomorphic-git": "^1.27.1"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.0",
+    "@types/node": "^22.10.0",
+    "tsdown": "^0.21.9",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  }
+}
