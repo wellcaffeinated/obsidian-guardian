@@ -40,4 +40,12 @@ owner="$(stat -c %u "$NOTE")"
 [ "$owner" = "$PUID" ] || fail "review note owned by uid $owner, expected $PUID"
 pass "owned by uid $PUID"
 
+log "exec og bless via the shim → runs as host user and refreshes the note"
+docker compose -f "$COMPOSE_FILE" exec -T guardian og bless >/dev/null
+blessed() { grep -Eq 'status: blessed' "$NOTE"; }
+wait_for 30 blessed || fail "note not refreshed to blessed after 'exec og bless'"
+owner2="$(stat -c %u "$NOTE")"
+[ "$owner2" = "$PUID" ] || fail "note owned by uid $owner2 after exec bless, expected $PUID"
+pass "exec og bless ran as uid $PUID and refreshed the note to clean"
+
 pass "DOCKER SMOKE PASS"

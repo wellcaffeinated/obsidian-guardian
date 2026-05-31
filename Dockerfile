@@ -27,8 +27,11 @@ RUN pnpm build
 ENV OG_VAULT=/vault
 ENV OG_GIT_DIR=/gitdir
 
+# `og` is a short CLI shim on PATH (for `docker compose exec guardian og …`);
+# the entrypoint chowns the gitDir then hands off to it.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY docker-og.sh /usr/local/bin/og
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/og
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["watch", "--poll"]

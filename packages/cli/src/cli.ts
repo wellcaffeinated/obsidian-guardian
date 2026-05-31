@@ -84,18 +84,25 @@ async function main(): Promise<void> {
     }
     case 'bless': {
       await engine.bless()
-      info('blessed — baseline advanced to the current state')
+      // Bless changes no vault files, so a running watcher won't re-render the
+      // note — refresh here so the note is correct after a one-shot bless.
+      await engine.refresh()
+      info(
+        'blessed — baseline advanced to the current state; review note updated',
+      )
       return
     }
     case 'revert': {
       if (!arg) throw new Error('revert requires a <path> argument')
       await engine.revert(arg)
-      info(`reverted ${arg} to the baseline`)
+      await engine.refresh()
+      info(`reverted ${arg} to the baseline; review note updated`)
       return
     }
     case 'rollback': {
       await engine.rollback()
-      info('rolled back — vault restored to the baseline')
+      await engine.refresh()
+      info('rolled back — vault restored to the baseline; review note updated')
       return
     }
     case 'tag': {

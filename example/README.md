@@ -33,20 +33,32 @@ The container logs each refresh, e.g.:
   modify   Welcome.md  +3 -1
 ```
 
-## Accept or undo changes (from the host)
+## Accept or undo changes
 
-Build once (`pnpm build`), then drive the same vault from the host:
+**Against the running container** — the image ships a short `og` shim that runs as
+your host user, so use `exec` while the watcher is up:
 
 ```sh
-pnpm og status      # show what's pending
-pnpm og bless       # accept everything — advance the baseline to now
-pnpm og revert Ideas.md   # restore one file from the baseline
-pnpm og rollback    # restore the whole vault to the baseline
-pnpm og tag before-cleanup   # name a snapshot
+docker compose -f docker-compose.example.yaml exec guardian og status
+docker compose -f docker-compose.example.yaml exec guardian og bless      # accept all
+docker compose -f docker-compose.example.yaml exec guardian og revert Ideas.md
+docker compose -f docker-compose.example.yaml exec guardian og rollback
+docker compose -f docker-compose.example.yaml exec guardian og tag before-cleanup
 ```
 
-After `bless`, the review note goes back to **Clean** and new edits are measured
-against the new baseline.
+Or, without a running container, a one-shot that goes through the entrypoint
+(same mounts, same host user) — note there's no `og` prefix here:
+
+```sh
+docker compose -f docker-compose.example.yaml run --rm guardian bless
+```
+
+`bless`/`revert`/`rollback` each rewrite the review note as part of the command,
+so it's correct immediately — even `bless`, which changes no vault files and so
+wouldn't otherwise trigger the watcher.
+
+**From the host** (Node installed, no container): `pnpm build` once, then
+`pnpm og status` / `pnpm og bless` / `pnpm og revert Ideas.md` / `pnpm og rollback`.
 
 ## How it's wired
 

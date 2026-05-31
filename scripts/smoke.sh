@@ -49,6 +49,8 @@ log "bless advances the baseline and clears pending"
 og bless >/dev/null
 og status >"$WORK/status2.txt"
 assert_grep '^clean' "$WORK/status2.txt"
+# bless changes no vault files, so it must refresh the note itself
+assert_grep 'status: blessed' "$NOTE"
 
 log "guard: a git-dir inside the vault is rejected"
 assert_fail node "$BIN" --vault "$VAULT" --git-dir "$VAULT/.inside" status
