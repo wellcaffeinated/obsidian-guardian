@@ -19,9 +19,11 @@ COPY packages/engine/package.json packages/engine/
 COPY packages/cli/package.json packages/cli/
 RUN pnpm install --frozen-lockfile
 
-# Build the engine then the CLI (pnpm resolves the topological order).
+# Build the CLI and its deps (engine); pnpm resolves the topological order.
+# Scoped to `cli...` on purpose: the container is the CLI service and never needs
+# the Obsidian plugin package (whose dev deps aren't installed in this image).
 COPY . .
-RUN pnpm build
+RUN pnpm --filter "@obsidian-guardian/cli..." build
 
 # The vault (work-tree) and the git database are provided as mounts at runtime.
 ENV OG_VAULT=/vault
