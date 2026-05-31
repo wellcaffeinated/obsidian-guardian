@@ -11,7 +11,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format . --write",
-    "knip": "knip"
+    "knip": "knip",
+    "og": "node packages/cli/dist/cli.mjs --vault ./example/vaults/demo --git-dir ./example/.gitdir"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",

@@ -1,0 +1,41 @@
+{
+  "name": "@obsidian-guardian/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Thin CLI + container adapter over the Obsidian Guardian engine: status/refresh/bless/revert/rollback/tag and a chokidar watch mode.",
+  "bin": {
+    "obsidian-guardian": "./dist/cli.mjs",
+    "og": "./dist/cli.mjs"
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsdown --watch",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@obsidian-guardian/engine": "workspace:*",
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsdown": "^0.21.9",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  }
+}
