@@ -7,6 +7,8 @@ ROOT="$(cd "$_LIB_DIR/.." && pwd)"
 COMPOSE_FILE="$ROOT/docker-compose.example.yaml"
 DEMO_VAULT="$ROOT/example/vaults/demo"
 ENGINE_CJS="$ROOT/packages/engine/dist/index.cjs"
+PLUGIN_COMPOSE_FILE="$ROOT/docker-compose.plugin-test.yaml"
+PLUGIN_VAULT="$ROOT/example/plugin-vault"
 
 log() { printf '\033[1;34m• %s\033[0m\n' "$*"; }
 pass() { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
@@ -46,4 +48,14 @@ reset_demo() {
   find "$ROOT/example/.gitdir" -mindepth 1 ! -name .gitkeep -exec rm -rf {} + \
     2>/dev/null || true
   git -C "$ROOT" restore -- example/vaults/demo >/dev/null 2>&1 || true
+}
+
+# Reset the plugin-test vault: stop the obsidian container, drop the review
+# output, and discard the workspace/app state Obsidian writes into .obsidian.
+# Both pre-clean and teardown, so a crashed run self-heals.
+reset_plugin() {
+  docker compose -f "$PLUGIN_COMPOSE_FILE" down --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$PLUGIN_VAULT/_OG"
+  git -C "$ROOT" restore -- example/plugin-vault >/dev/null 2>&1 || true
+  git -C "$ROOT" clean -fdq -- example/plugin-vault >/dev/null 2>&1 || true
 }

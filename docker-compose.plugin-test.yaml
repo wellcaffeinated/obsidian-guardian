@@ -1,0 +1,23 @@
+# Plugin test rig: run the Obsidian Guardian *plugin* inside a headless Obsidian
+# (wellcaffeinated/obsidian-headless-container) and drive it with the Obsidian
+# CLI via `docker exec`. Never point this at your real Obsidian — see
+# scripts/smoke-plugin.sh for the full loop.
+#
+#   PUID=$(id -u) PGID=$(id -g) docker compose -f docker-compose.plugin-test.yaml up -d
+#   docker compose -f docker-compose.plugin-test.yaml exec -T obsidian obsidian version
+#
+# The built plugin is copied into the vault's plugins folder by the smoke script
+# *before* `up` (a single vault mount — no nested bind mount that docker would
+# create root-owned). The engine's git database lives under the container user's
+# app-data (~/.local/share), OUTSIDE the vault — ephemeral, fine for a test.
+services:
+  obsidian:
+    image: ghcr.io/wellcaffeinated/obsidian-headless-container:latest
+    environment:
+      # Write vault files back as the host user, like the guardian container.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      DEFAULT_VAULT: plugin-test
+    volumes:
+      - ./example/plugin-vault:/vaults/plugin-test
+    init: true

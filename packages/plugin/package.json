@@ -1,0 +1,24 @@
+{
+  "name": "@obsidian-guardian/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Obsidian plugin adapter over the Obsidian Guardian engine: a vault-wide review panel with bless/rollback.",
+  "scripts": {
+    "dev": "tsdown --watch",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@obsidian-guardian/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "obsidian": "latest",
+    "tsdown": "^0.21.9",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  }
+}

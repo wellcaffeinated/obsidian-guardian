@@ -1,0 +1,76 @@
+/* Obsidian Guardian review panel */
+.og-review {
+  padding: 0 var(--size-4-4);
+}
+
+.og-review__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-3);
+}
+
+.og-review__meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.og-review__actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-4);
+}
+
+.og-review__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.og-review__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.og-review__kind {
+  flex: 0 0 auto;
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  min-width: 4.5em;
+}
+
+.og-review__kind--add {
+  color: var(--color-green);
+}
+.og-review__kind--modify {
+  color: var(--color-yellow);
+}
+.og-review__kind--delete {
+  color: var(--color-red);
+}
+.og-review__kind--rename {
+  color: var(--color-blue);
+}
+
+.og-review__path {
+  flex: 1 1 auto;
+  word-break: break-word;
+}
+
+.og-review__stats {
+  flex: 0 0 auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.og-review__empty {
+  color: var(--text-muted);
+  padding: var(--size-4-4) 0;
+}

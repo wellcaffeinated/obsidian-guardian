@@ -126,15 +126,24 @@ Phasing (de-risk hard logic in the easy environment first):
     - Container drops root→host user the **linux-server way** (`gosu` + `PUID`/`PGID`), not a static compose `user:`. Verified: review note written back owned by the host user. Management commands: `docker compose run --rm guardian <cmd>` (through the entrypoint) or, against a running watcher, `docker compose exec guardian og <cmd>` — `og` is a PATH shim (`docker-og.sh`) that re-does the gosu drop so `exec` runs as the host user with a short command.
     - **`bless`/`revert`/`rollback` refresh the review note** themselves (CLI layer). `bless` changes no vault files, so a running watcher wouldn't re-render the note otherwise; this keeps a one-shot management command's output correct without a watcher.
     - Demo verified live: container watch → host edit → debounced refresh → updated `_OG/changes-<hash>.md`; filename stable across restart (persisted id), identical between container and host `pnpm og` over the shared gitDir; bless/revert/rollback all work.
-- [ ] **Phase 2 — Obsidian plugin.** Same engine; settings, native review panel, lifecycle, app-data wiring; community-store publish.
+- [~] **Phase 2 — Obsidian plugin.** Same engine; `packages/plugin` (`isDesktopOnly`). **First slice ✅ green: 40 tests (17 engine + 7 cli + 16 plugin), typecheck, lint, knip, build; live plugin smoke passes in the headless container.** First slice = configure + see changes + bless + rollback; per-file revert/tag deliberately deferred (native file history covers single files).
+  - [x] `packages/plugin` scaffold: `manifest.json` (`isDesktopOnly: true`), tsdown emits CJS `main.js` (`format:['cjs']`, `outExtensions js:'.js'`, `deps.alwaysBundle:[/.*/]` + `neverBundle:['obsidian','electron']` so the bundle is self-contained and node builtins resolve to Electron's Node), `build:done` hook copies `manifest.json`+`styles.css` into `dist/`. `obsidian` is a devDep (external).
+  - [x] `config.ts` — `resolvePluginConfig`: `vaultPath` from `FileSystemAdapter.getBasePath()`, `gitDir` under **OS app-data** (`~/.local/share`|`Application Support`|`%APPDATA%`) keyed by `sha256(vaultPath)` so it's per-machine/per-vault and OUTSIDE the synced tree; ports the outside-vault assert. Persisted settings override.
+  - [x] `watcher.ts` (Obsidian-free, ported from `watch.ts`): `createSerializedRefresh` (dirty-flag), `shouldIgnorePath` (ignore `_OG/` + `.obsidian/` or rendering the note re-triggers refresh), `createDebouncer`. `format.ts`: pure `Status`→rows for the panel (the DOM-free unit-test seam).
+  - [x] `review-view.ts` — `ReviewView` (ItemView) opened as a **main-area tab** (vault-wide, not a sidebar) via `workspace.getLeaf(true)`; header (baseline short-SHA, clean/active), Refresh/Bless/Roll-back buttons, change list; `ConfirmModal` gates rollback. `settings.ts` — `GuardianSettingTab` (ignores/marker/author/review-folder/gitDir/replicaId; rebuilds engine on `hide()`).
+  - [x] `main.ts` — `ObsidianGuardianPlugin` implements the view controller + settings host: `onLayoutReady`→`initEngine` (new `ReviewEngine`→`onboard`→`refresh`), debounced refresh on `vault.on(modify/create/delete/rename)`, commands (open/refresh/bless/rollback), ribbon + clickable status-bar.
+  - [x] Live rig: `docker-compose.plugin-test.yaml` (image `ghcr.io/wellcaffeinated/obsidian-headless-container`, single vault mount), seed `example/plugin-vault/`, `scripts/smoke-plugin.sh` + `pnpm test:plugin` (build→copy plugin in→enable→assert load+no errors→screenshot→edit reflects→bless clears), `reset_plugin` in `lib.sh` (pre-clean + teardown).
+  - Notable Phase-2 decisions / gotchas:
+    - **Engine runs unchanged on desktop**: its `node:fs`/`node:path`/`node:os`/`node:crypto` resolve to Electron's Node; `isDesktopOnly` keeps it off mobile (mobile stays view-only via the synced note).
+    - **Test only in the headless container, never the real Obsidian.** Drive it with `docker exec <container> obsidian <cmd>` (skip the ssrv socket/shim). The container defaults to **Restricted Mode**: the master switch is the `enable-plugin-<appId>` **localStorage** flag — set it directly + `loadManifests()` + `enablePlugin(id)`, and **retry** (idempotent) because `obs version` can succeed a beat before the plugins API is ready.
+  - [ ] Remaining for Phase 2: per-file revert + tag in the panel; community-store packaging (release-please for the plugin, versioned `manifest.json`/`versions.json`); broader live assertions (rollback, mobile-emulation read of the note).
 - [ ] **Phase 3 — Optional.** Claude integration layer; watcher-enacts-checkboxes; plugin-on-headless.
 
-**Resume here:** Phase 2 — `packages/plugin`: the Obsidian plugin adapter (`isDesktopOnly`). Reuse the
-**same `ReviewEngine`** (never import `obsidian` in the engine). Wire app-data for the external `gitDir`,
-a settings tab (vault path is the adapter's `app.vault` root; ignores/marker/author), a native review
-panel rendering `Status`, and lifecycle hooks to `refresh()` on vault modify (debounced, like
-`packages/cli/src/watch.ts`). The engine API to wrap is in `packages/engine/src/index.ts`; the CLI
-adapter in `packages/cli` is the working reference.
+**Resume here:** Phase 2 polish — extend `packages/plugin`: add per-file **revert** (`engine.revert(path)`) and
+**tag** to the panel/commands, then wire community-store packaging (release-please + `versions.json`). The
+slice (load/onboard/panel/bless/rollback/watch) is built and green; the working references are
+`packages/plugin/src/{main,review-view,config,watcher}.ts` and the live loop in `scripts/smoke-plugin.sh`
+(`pnpm test:plugin`). Engine API: `packages/engine/src/index.ts`; CLI adapter: `packages/cli`.
 
 ### Key design decisions (locked)
 - git (not jj); own repo (coexists with Obsidian Git, no dependency on it).
