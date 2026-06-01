@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import ignore, { type Ignore } from 'ignore'
+import { renderChangesFile } from './changes-file'
 import {
   DEFAULT_AUTHOR,
   DEFAULT_IGNORE,
@@ -25,7 +26,12 @@ import {
   writeRef,
   writeTag,
 } from './git-ops'
-import { readOrCreateReplicaId, reviewNoteName } from './replica-id'
+import {
+  changesFileName,
+  changesFilePrefix,
+  readOrCreateReplicaId,
+  reviewNoteName,
+} from './replica-id'
 import { renderReviewNote } from './review-note'
 import {
   nextSeq,
@@ -77,6 +83,7 @@ export class ReviewEngine {
   private readonly author: Author
   private readonly matcher: Ignore
   private readonly configReplicaId: string | undefined
+  private resolvedReplicaId: string | undefined
   private resolvedReviewNoteName: string | undefined
 
   constructor(config: EngineConfig) {
@@ -117,14 +124,32 @@ export class ReviewEngine {
     return this.resolvedReviewNoteName
   }
 
+  /** Resolve (once) and cache this replica's id. */
+  private async ensureReplicaId(): Promise<string> {
+    if (this.resolvedReplicaId === undefined) {
+      this.resolvedReplicaId =
+        this.configReplicaId ?? (await readOrCreateReplicaId(this.gitDir))
+    }
+    return this.resolvedReplicaId
+  }
+
   /** Resolve (once) and cache this replica's review-note filename. */
   private async ensureReviewNoteName(): Promise<string> {
     if (this.resolvedReviewNoteName === undefined) {
-      const replicaId =
-        this.configReplicaId ?? (await readOrCreateReplicaId(this.gitDir))
-      this.resolvedReviewNoteName = reviewNoteName(replicaId)
+      this.resolvedReviewNoteName = reviewNoteName(await this.ensureReplicaId())
     }
     return this.resolvedReviewNoteName
+  }
+
+  /**
+   * Filename prefix shared by this replica's rotating signal files. Valid after
+   * {@link onboard}. A watcher matches this to act only on its own files.
+   */
+  get signalPrefix(): string {
+    if (this.resolvedReplicaId === undefined) {
+      throw new Error('signalPrefix is available after onboard()')
+    }
+    return changesFilePrefix(this.resolvedReplicaId)
   }
 
   /**
@@ -269,6 +294,30 @@ export class ReviewEngine {
       clean: changes.length === 0,
       changes,
     }
+  }
+
+  /**
+   * Snapshot the current tree and write its rotating, immutable signal file
+   * (`<reviewFolder>/changes-<replica>-<snap8>.md`). Returns the status, the
+   * filename written, and the exact bytes written (so a watcher can record a
+   * self-write hash and not react to its own output). Does not delete superseded
+   * files — retention is the adapter's concern.
+   */
+  async writeSnapshot(): Promise<{
+    status: SnapshotStatus
+    fileName: string
+    content: string
+  }> {
+    const status = await this.snapshot()
+    const fileName = changesFileName(
+      await this.ensureReplicaId(),
+      status.snapshot,
+    )
+    const content = renderChangesFile(status, this.vaultName)
+    const dir = join(this.vaultPath, this.reviewFolder)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(join(dir, fileName), content)
+    return { status, fileName, content }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */

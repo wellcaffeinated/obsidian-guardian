@@ -1,5 +1,11 @@
-import { sep } from 'node:path'
-import type { ReviewEngine, Status } from '@obsidian-guardian/engine'
+import { createHash } from 'node:crypto'
+import { readdir, readFile, rm } from 'node:fs/promises'
+import { basename, join, sep } from 'node:path'
+import {
+  parseChangesSignal,
+  type ReviewEngine,
+  type SnapshotStatus,
+} from '@obsidian-guardian/engine'
 import chokidar from 'chokidar'
 import type { ResolvedConfig } from './config'
 
@@ -7,11 +13,15 @@ import type { ResolvedConfig } from './config'
 export interface WatchOptions {
   /** Use polling instead of native fs events (more reliable over bind-mounts). */
   poll?: boolean
-  /** Quiet period (ms) after the last change before refreshing. Default 300. */
+  /** Quiet period (ms) after the last change before acting. Default 300. */
   debounceMs?: number
-  /** Called after every refresh with the freshly-computed status. */
-  onRefresh?: (status: Status) => void
-  /** Called once the watcher is up and the initial refresh has run. */
+  /** Grace (ms) a superseded signal file is kept before deletion. Default 30000. */
+  graceMs?: number
+  /** Called after every snapshot write with the freshly-computed status. */
+  onRefresh?: (status: SnapshotStatus) => void
+  /** Called when an `accepted` signal was processed (applied = baseline moved). */
+  onBless?: (snapshot: string, applied: boolean) => void
+  /** Called once the watcher is up and the initial pass has run. */
   onReady?: () => void
 }
 
@@ -20,26 +30,30 @@ export interface WatchHandle {
   close: () => Promise<void>
 }
 
-/** True for paths the watcher should never react to (review output, git, deps). */
-function makeIgnorer(
-  vaultPath: string,
-  reviewFolder: string,
-): (path: string) => boolean {
-  const reviewAbs = `${vaultPath}${sep}${reviewFolder}`
-  return (path: string): boolean => {
-    if (path === reviewAbs || path.startsWith(`${reviewAbs}${sep}`)) return true
-    return (
-      path.includes(`${sep}.git${sep}`) ||
-      path.endsWith(`${sep}.git`) ||
-      path.includes(`${sep}node_modules${sep}`)
-    )
-  }
+const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+
+/** Churny paths the watcher never reacts to (the review folder is handled separately). */
+function makeIgnorer(): (path: string) => boolean {
+  const seg = (p: string, name: string): boolean =>
+    p.includes(`${sep}${name}${sep}`) || p.endsWith(`${sep}${name}`)
+  return (path: string): boolean =>
+    seg(path, '.git') ||
+    seg(path, 'node_modules') ||
+    seg(path, '.obsidian') ||
+    seg(path, '.trash') ||
+    path.endsWith(`${sep}.DS_Store`)
 }
 
 /**
- * Watch the vault and re-`refresh()` (regenerate the review note) on every
- * change, debounced. Writes to the review folder are ignored so the watcher
- * never reacts to its own output. Resolves once the watcher is ready.
+ * Watch the vault and maintain the rotating, immutable signal files in the
+ * review folder. On every vault change it writes a new snapshot file (an
+ * immutable per-snapshot `changes-<replica>-<snap>.md`) and supersedes the prior
+ * one after a grace window. It also reacts to *external* edits of its own
+ * replica's files — an `accepted: true` toggle synced back from another device —
+ * by blessing exactly that pinned snapshot (idempotent, order-independent via the
+ * engine's seq high-water mark). Writes are distinguished from external edits by
+ * a content hash, so the watcher never reacts to its own output. Resolves once
+ * the watcher is ready.
  */
 export async function runWatch(
   engine: ReviewEngine,
@@ -47,45 +61,130 @@ export async function runWatch(
   options: WatchOptions = {},
 ): Promise<WatchHandle> {
   const debounceMs = options.debounceMs ?? 300
+  const graceMs = options.graceMs ?? 30_000
+  const reviewAbs = join(config.vaultPath, config.reviewFolder)
+  const prefix = engine.signalPrefix
 
-  // Serialize refreshes: if one is running, mark dirty and re-run when it ends.
-  let running = false
-  let dirty = false
-  const refresh = async (): Promise<void> => {
-    if (running) {
-      dirty = true
-      return
-    }
-    running = true
+  // Serialize all engine ops onto a single chain (errors don't break the chain).
+  let chain: Promise<void> = Promise.resolve()
+  const serialize = (fn: () => Promise<void>): Promise<void> => {
+    const run = chain.then(fn)
+    chain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  // Hash of the bytes we last wrote to each signal path, so an event that reads
+  // back those exact bytes is recognised as our own write and ignored.
+  const lastWritten = new Map<string, string>()
+  let current: string | null = null
+  const timers = new Map<string, ReturnType<typeof setTimeout>>()
+  let closed = false
+
+  const isOurs = (name: string): boolean =>
+    name.startsWith(prefix) && name.endsWith('.md')
+
+  const listSignalFiles = async (): Promise<string[]> => {
     try {
-      do {
-        dirty = false
-        const status = await engine.refresh()
-        options.onRefresh?.(status)
-      } while (dirty)
-    } finally {
-      running = false
+      return (await readdir(reviewAbs)).filter(isOurs)
+    } catch {
+      return []
     }
   }
 
-  // Initial pass so the review note reflects the current state immediately.
-  await refresh()
+  const scheduleSupersede = (name: string): void => {
+    if (closed) return
+    setTimeout(() => {
+      if (name === current) return
+      const p = join(reviewAbs, name)
+      rm(p, { force: true })
+        .then(() => lastWritten.delete(p))
+        .catch(() => undefined)
+    }, graceMs)
+  }
 
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const schedule = (): void => {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = undefined
-      void refresh()
-    }, debounceMs)
+  // Write the current snapshot file and supersede the previous one.
+  const reconcileCurrent = async (): Promise<void> => {
+    const { status, fileName, content } = await engine.writeSnapshot()
+    lastWritten.set(join(reviewAbs, fileName), sha(content))
+    if (current && current !== fileName) scheduleSupersede(current)
+    current = fileName
+    options.onRefresh?.(status)
+  }
+
+  // Read + parse a signal file, returning null for our own writes / missing /
+  // unparseable files.
+  const readSignal = async (
+    name: string,
+  ): Promise<ReturnType<typeof parseChangesSignal> | null> => {
+    const p = join(reviewAbs, name)
+    let content: string
+    try {
+      content = await readFile(p, 'utf8')
+    } catch {
+      return null
+    }
+    if (sha(content) === lastWritten.get(p)) return null // our own write
+    return parseChangesSignal(content)
+  }
+
+  const handleSignal = async (name: string): Promise<void> => {
+    const sig = await readSignal(name)
+    if (!sig?.accepted || sig.snapshot === null || sig.seq === null) return
+    const applied = await engine.blessSnapshot(sig.snapshot, sig.seq)
+    if (applied) await reconcileCurrent()
+    scheduleSupersede(name) // consume the toggled file either way
+    options.onBless?.(sig.snapshot, applied)
+  }
+
+  // Initial pass: apply any signal pending from before we started, write the
+  // current snapshot, then clean up stale files.
+  await serialize(async () => {
+    for (const name of await listSignalFiles()) {
+      const sig = await readSignal(name)
+      if (sig?.accepted && sig.snapshot !== null && sig.seq !== null) {
+        await engine.blessSnapshot(sig.snapshot, sig.seq)
+      }
+    }
+    await reconcileCurrent()
+    for (const name of await listSignalFiles()) {
+      if (name !== current) scheduleSupersede(name)
+    }
+  })
+
+  const debounce = (key: string, fn: () => void): void => {
+    const existing = timers.get(key)
+    if (existing) clearTimeout(existing)
+    timers.set(
+      key,
+      setTimeout(() => {
+        timers.delete(key)
+        fn()
+      }, debounceMs),
+    )
   }
 
   const watcher = chokidar.watch(config.vaultPath, {
     ignoreInitial: true,
     usePolling: options.poll ?? false,
-    ignored: makeIgnorer(config.vaultPath, config.reviewFolder),
+    ignored: makeIgnorer(),
   })
-  watcher.on('all', schedule)
+  watcher.on('all', (event, path) => {
+    if (path === reviewAbs) return
+    if (path.startsWith(`${reviewAbs}${sep}`)) {
+      const name = basename(path)
+      if (!isOurs(name)) return
+      if (event === 'unlink') {
+        lastWritten.delete(path)
+        return
+      }
+      debounce(`signal:${name}`, () => void serialize(() => handleSignal(name)))
+      return
+    }
+    debounce('snapshot', () => void serialize(reconcileCurrent))
+  })
 
   await new Promise<void>((resolveReady) => {
     watcher.once('ready', () => resolveReady())
@@ -94,7 +193,9 @@ export async function runWatch(
 
   return {
     close: async (): Promise<void> => {
-      if (timer) clearTimeout(timer)
+      closed = true
+      for (const t of timers.values()) clearTimeout(t)
+      timers.clear()
       await watcher.close()
     },
   }

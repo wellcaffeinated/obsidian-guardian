@@ -1,4 +1,8 @@
-import { ReviewEngine, type Status } from '@obsidian-guardian/engine'
+import {
+  ReviewEngine,
+  type SnapshotStatus,
+  type Status,
+} from '@obsidian-guardian/engine'
 import type { ResolvedConfig } from './config'
 
 /** Short form of a commit marker for human output. */
@@ -33,4 +37,13 @@ export function formatStatus(status: Status): string {
     `${n} change${n === 1 ? '' : 's'} since baseline ${short(status.marker)}:`,
     ...lines,
   ].join('\n')
+}
+
+/** Render a {@link SnapshotStatus} as a compact line for watch logging. */
+export function formatSnapshotStatus(status: SnapshotStatus): string {
+  if (status.clean) {
+    return `clean — nothing pending since baseline ${short(status.baseline)}`
+  }
+  const n = status.changes.length
+  return `${n} change${n === 1 ? '' : 's'} from baseline ${short(status.baseline)} — snapshot ${status.snapshot.slice(0, 8)} (seq ${status.seq})`
 }

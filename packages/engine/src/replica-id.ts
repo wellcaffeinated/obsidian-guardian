@@ -53,6 +53,16 @@ export function reviewNoteName(replicaId: string): string {
 }
 
 /**
+ * Filename prefix shared by all of one replica's rotating signal files:
+ * `changes-<12-hex-replica>-`. A watcher matches this prefix to act only on its
+ * **own** replica's files — never another device's files synced into the same
+ * review folder.
+ */
+export function changesFilePrefix(replicaId: string): string {
+  return `changes-${replicaHash(replicaId)}-`
+}
+
+/**
  * The rotating signal filename for a replica + snapshot:
  * `changes-<12-hex-replica>-<8-hex-snapshot>.md`. The replica hash keeps two
  * devices reviewing one synced vault from ever sharing a filename; the short
@@ -62,7 +72,7 @@ export function changesFileName(
   replicaId: string,
   snapshotOid: string,
 ): string {
-  return `changes-${replicaHash(replicaId)}-${snapshotOid.slice(0, 8)}.md`
+  return `${changesFilePrefix(replicaId)}${snapshotOid.slice(0, 8)}.md`
 }
 
 function replicaHash(replicaId: string): string {

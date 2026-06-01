@@ -33,9 +33,9 @@ wait_for() {
   done
 }
 
-# The review-note filename the engine would generate for a given replica id.
-review_name() {
-  node -e 'const{reviewNoteName}=require(process.argv[1]);process.stdout.write(reviewNoteName(process.argv[2]))' \
+# The rotating signal-file prefix the engine would generate for a replica id.
+signal_prefix() {
+  node -e 'const{changesFilePrefix}=require(process.argv[1]);process.stdout.write(changesFilePrefix(process.argv[2]))' \
     "$ENGINE_CJS" "$1"
 }
 

@@ -1,7 +1,12 @@
-export { renderChangesFile } from './changes-file'
+export {
+  type ChangesSignal,
+  parseChangesSignal,
+  renderChangesFile,
+} from './changes-file'
 export { ReviewEngine } from './engine'
 export {
   changesFileName,
+  changesFilePrefix,
   readOrCreateReplicaId,
   reviewNoteName,
 } from './replica-id'

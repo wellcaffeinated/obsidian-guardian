@@ -57,3 +57,36 @@ export function renderChangesFile(
   const lines = status.changes.map(renderEntry).join('\n')
   return `${frontmatter}\n\n# Changes\n\n${count} change${count === 1 ? '' : 's'} from baseline:\n\n${lines}\n\nToggle **accepted** in the properties above to bless this snapshot as the new baseline.\n`
 }
+
+/** The bless signal parsed from a changes file's frontmatter. */
+export interface ChangesSignal {
+  /** True when the `accepted` checkbox has been toggled on. */
+  accepted: boolean
+  /** The snapshot oid this file pins (the bless target), or null if absent. */
+  snapshot: string | null
+  /** The monotonic seq this file pins, or null if absent. */
+  seq: number | null
+}
+
+/**
+ * Parse the bless signal out of a changes file. Reads only the frontmatter
+ * `accepted` / `snapshot` / `seq` keys with a tiny line scanner (no YAML dep) —
+ * the inverse of {@link renderChangesFile}. Tolerant of missing keys/frontmatter
+ * so a half-synced or hand-mangled file degrades to "no signal" rather than
+ * throwing.
+ */
+export function parseChangesSignal(md: string): ChangesSignal {
+  const fm = /^---\n([\s\S]*?)\n---/.exec(md)
+  const body = fm?.[1] ?? ''
+  const read = (key: string): string | null => {
+    const m = new RegExp(`^${key}:[ \\t]*(.+)$`, 'm').exec(body)
+    return m?.[1]?.trim() ?? null
+  }
+  const seqRaw = read('seq')
+  const seq = seqRaw !== null ? Number.parseInt(seqRaw, 10) : Number.NaN
+  return {
+    accepted: read('accepted') === 'true',
+    snapshot: read('snapshot'),
+    seq: Number.isFinite(seq) ? seq : null,
+  }
+}

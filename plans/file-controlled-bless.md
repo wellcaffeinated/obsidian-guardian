@@ -187,16 +187,28 @@ the same ref scheme (`refs/og/checkpoints/<sortable-id>`). Distinct axes remain:
 
 ## Engine / adapter work (sketch)
 
-> **Status:** the engine slice below is **built and green** (32 engine tests +
-> existing CLI/plugin suites pass; typecheck/lint/knip/build clean; host
-> `test:smoke` still passes). Implemented: `git-ops` primitives
+> **Status:** the engine slice **and** the CLI/watcher slice are **built and
+> green** (36 engine + 9 CLI + 16 plugin tests; typecheck/lint/knip/build clean;
+> `test:smoke` and `test:docker` both pass, including the end-to-end
+> `accepted: true` file-controlled bless in the real container, host-owned).
+>
+> Engine: `git-ops` primitives
 > (`writeRef`/`commitIndex`/`commitTree`/`readTreeOid`/`readCommitTime`),
 > `state.ts` (non-synced `snapshot-seq` + `bless-hwm` counters under the gitDir),
-> `ReviewEngine.checkpoint()/blessSnapshot()/snapshot()`, the `SnapshotStatus`
-> type, `renderChangesFile()`, and `changesFileName()`. `refresh()` and the
-> watcher are intentionally **not** rewired yet — that's the next (CLI/watcher)
-> slice, which is where the rotating-file orchestration, the `_OG/` external-edit
-> detection, and the smoke-level assertions land.
+> `ReviewEngine.checkpoint()/blessSnapshot()/snapshot()/writeSnapshot()`,
+> `signalPrefix`, the `SnapshotStatus` type, `renderChangesFile()` +
+> `parseChangesSignal()`, and `changesFileName()`/`changesFilePrefix()`.
+>
+> CLI/watcher: `watch.ts` now maintains rotating immutable signal files, reacts
+> to external `accepted: true` edits (self-write filtered by content hash),
+> blesses by pinned oid, and supersedes old files after a `--grace` window
+> (default 30s); one-shot `refresh`/`bless`/`revert`/`rollback` write the new
+> snapshot file. Smokes assert the accepted round-trip (host backgrounded watch +
+> docker synced-edit simulation).
+>
+> **Still on the OLD single-note format:** the Obsidian **plugin**
+> (`engine.refresh()`/`renderReviewNote`/`reviewNoteName`) — migrating it to
+> rotating files + `accepted` is the remaining follow-up for this feature.
 
 Engine (pure, `packages/engine`):
 

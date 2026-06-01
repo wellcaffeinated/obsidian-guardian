@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -24,6 +31,27 @@ async function freshVault(): Promise<{ vault: string; gitDir: string }> {
   return { vault, gitDir: join(root, 'gitdb') }
 }
 
+/** Find the current signal file containing `needle`, or null. */
+async function findSignal(
+  reviewDir: string,
+  prefix: string,
+  needle: string,
+): Promise<{ name: string; content: string } | null> {
+  let names: string[]
+  try {
+    names = (await readdir(reviewDir)).filter(
+      (n) => n.startsWith(prefix) && n.endsWith('.md'),
+    )
+  } catch {
+    return null
+  }
+  for (const name of names) {
+    const content = await readFile(join(reviewDir, name), 'utf8')
+    if (content.includes(needle)) return { name, content }
+  }
+  return null
+}
+
 describe('formatStatus', () => {
   it('summarises a clean tree and a changed tree', async () => {
     const { vault, gitDir } = await freshVault()
@@ -39,10 +67,11 @@ describe('formatStatus', () => {
 })
 
 describe('runWatch', () => {
-  it('writes the review note on the initial pass and after a change', async () => {
+  it('writes a clean snapshot file initially and an accepted:false file after a change', async () => {
     const { vault, gitDir } = await freshVault()
     const config = resolveConfig({ vault, gitDir })
     const engine = await createEngine(config)
+    const reviewDir = join(vault, config.reviewFolder)
 
     const onRefresh = vi.fn()
     const handle = await runWatch(engine, config, {
@@ -51,14 +80,19 @@ describe('runWatch', () => {
       onRefresh,
     })
 
-    const notePath = join(vault, config.reviewFolder, engine.reviewNoteName)
-    expect(await readFile(notePath, 'utf8')).toContain('status: blessed')
+    // initial pass: a clean snapshot file exists, no accepted checkbox
+    const clean = await findSignal(reviewDir, engine.signalPrefix, '# Changes')
+    expect(clean?.content).toContain('Nothing pending')
+    expect(clean?.content).not.toContain('accepted:')
     expect(onRefresh).toHaveBeenCalledTimes(1)
 
     await writeFile(join(vault, 'new.md'), 'fresh\n')
     await vi.waitFor(
       async () => {
-        expect(await readFile(notePath, 'utf8')).toContain('[[new]]')
+        const sig = await findSignal(reviewDir, engine.signalPrefix, '[[new]]')
+        expect(sig?.content).toContain('accepted: false')
+        expect(sig?.content).toMatch(/^snapshot: [0-9a-f]{40}$/m)
+        expect(sig?.content).toMatch(/^seq: \d+$/m)
       },
       { timeout: 4000, interval: 50 },
     )
@@ -66,7 +100,7 @@ describe('runWatch', () => {
     await handle.close()
   })
 
-  it('never reacts to its own review-note writes', async () => {
+  it('never reacts to its own writes', async () => {
     const { vault, gitDir } = await freshVault()
     const config = resolveConfig({ vault, gitDir })
     const engine = await createEngine(config)
@@ -77,10 +111,104 @@ describe('runWatch', () => {
       debounceMs: 20,
       onRefresh,
     })
-    // After the initial pass, a quiet period must not trigger more refreshes
-    // (writing the review note would otherwise loop forever).
+    // Writing the snapshot file must not retrigger the watcher.
     await new Promise((r) => setTimeout(r, 400))
     expect(onRefresh).toHaveBeenCalledTimes(1)
+
+    await handle.close()
+  })
+
+  it('blesses the pinned snapshot when accepted: true is synced back', async () => {
+    const { vault, gitDir } = await freshVault()
+    const config = resolveConfig({ vault, gitDir })
+    const engine = await createEngine(config)
+    const reviewDir = join(vault, config.reviewFolder)
+
+    const onBless = vi.fn()
+    const handle = await runWatch(engine, config, {
+      poll: true,
+      debounceMs: 20,
+      onBless,
+    })
+
+    await writeFile(join(vault, 'new.md'), 'fresh\n')
+    let signalName = ''
+    await vi.waitFor(
+      async () => {
+        const sig = await findSignal(reviewDir, engine.signalPrefix, '[[new]]')
+        expect(sig).not.toBeNull()
+        signalName = (sig as { name: string }).name
+      },
+      { timeout: 4000, interval: 50 },
+    )
+
+    // Simulate the mobile edit syncing back: toggle the checkbox on.
+    const path = join(reviewDir, signalName)
+    const toggled = (await readFile(path, 'utf8')).replace(
+      'accepted: false',
+      'accepted: true',
+    )
+    await writeFile(path, toggled)
+
+    await vi.waitFor(
+      async () => {
+        expect((await engine.status()).clean).toBe(true) // baseline advanced
+      },
+      { timeout: 4000, interval: 50 },
+    )
+    expect(onBless).toHaveBeenCalledWith(expect.any(String), true)
+
+    await handle.close()
+  })
+
+  it('treats a replayed (already-blessed) accepted signal as a no-op', async () => {
+    const { vault, gitDir } = await freshVault()
+    const config = resolveConfig({ vault, gitDir })
+    const engine = await createEngine(config)
+    const reviewDir = join(vault, config.reviewFolder)
+
+    const onBless = vi.fn()
+    const handle = await runWatch(engine, config, {
+      poll: true,
+      debounceMs: 20,
+      graceMs: 10_000, // keep the consumed file around so we can replay it
+      onBless,
+    })
+
+    await writeFile(join(vault, 'new.md'), 'fresh\n')
+    let signalName = ''
+    await vi.waitFor(
+      async () => {
+        const sig = await findSignal(reviewDir, engine.signalPrefix, '[[new]]')
+        expect(sig).not.toBeNull()
+        signalName = (sig as { name: string }).name
+      },
+      { timeout: 4000, interval: 50 },
+    )
+
+    // Accept it once → applied.
+    const path = join(reviewDir, signalName)
+    const accepted = (await readFile(path, 'utf8')).replace(
+      'accepted: false',
+      'accepted: true',
+    )
+    await writeFile(path, accepted)
+    await vi.waitFor(
+      () => expect(onBless).toHaveBeenCalledWith(expect.any(String), true),
+      {
+        timeout: 4000,
+        interval: 50,
+      },
+    )
+
+    // Replay the same accepted signal (a duplicate sync) → must be a no-op, and
+    // must not regress the now-clean baseline.
+    await writeFile(path, `${accepted}\n<!-- replay -->\n`)
+    await vi.waitFor(
+      () => expect(onBless).toHaveBeenLastCalledWith(expect.any(String), false),
+      { timeout: 4000, interval: 50 },
+    )
+    expect((await engine.status()).clean).toBe(true)
 
     await handle.close()
   })

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import {
   changesFileName,
   type EngineConfig,
+  parseChangesSignal,
   ReviewEngine,
   renderChangesFile,
   type SnapshotStatus,
@@ -192,5 +193,54 @@ describe('changesFileName', () => {
   it('embeds the replica hash and a short snapshot oid', async () => {
     const name = changesFileName('fixed-replica', 'abcdef0123456789')
     expect(name).toMatch(/^changes-[0-9a-f]{12}-abcdef01\.md$/)
+  })
+})
+
+describe('parseChangesSignal (round-trips renderChangesFile)', () => {
+  it('reads accepted/snapshot/seq back out of a rendered active file', async () => {
+    const { engine, vault } = await freshEngine({ 'note.md': 'a\n' })
+    await write(vault, 'note.md', 'a\nb\n')
+    const status = await engine.snapshot()
+    const md = renderChangesFile(status, 'demo')
+    const sig = parseChangesSignal(md)
+    expect(sig.accepted).toBe(false)
+    expect(sig.snapshot).toBe(status.snapshot)
+    expect(sig.seq).toBe(status.seq)
+  })
+
+  it('reads accepted: true when the checkbox is toggled', () => {
+    const md =
+      '---\naccepted: true\nsnapshot: deadbeef\nseq: 7\n---\n# Changes\n'
+    expect(parseChangesSignal(md)).toEqual({
+      accepted: true,
+      snapshot: 'deadbeef',
+      seq: 7,
+    })
+  })
+
+  it('degrades to no-signal on a clean file or missing frontmatter', async () => {
+    const { engine } = await freshEngine({ 'note.md': 'a\n' })
+    const clean = renderChangesFile(await engine.snapshot(), 'demo')
+    expect(parseChangesSignal(clean).accepted).toBe(false)
+    expect(parseChangesSignal('no frontmatter here')).toEqual({
+      accepted: false,
+      snapshot: null,
+      seq: null,
+    })
+  })
+})
+
+describe('writeSnapshot', () => {
+  it('writes a per-replica rotating file and returns its content', async () => {
+    const { engine, vault } = await freshEngine({ 'note.md': 'a\n' })
+    await write(vault, 'note.md', 'a\nb\n')
+    const { status, fileName, content } = await engine.writeSnapshot()
+    expect(fileName.startsWith(engine.signalPrefix)).toBe(true)
+    expect(fileName).toBe(
+      `${engine.signalPrefix}${status.snapshot.slice(0, 8)}.md`,
+    )
+    const onDisk = await readFile(join(vault, '_OG', fileName), 'utf8')
+    expect(onDisk).toBe(content)
+    expect(content).toContain('accepted: false')
   })
 })
