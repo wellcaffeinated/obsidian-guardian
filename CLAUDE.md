@@ -12,6 +12,13 @@ plan"** (read it with `obsidian read file='Agent vault review — plan'`). That
 note is the source of truth for intent; this file tracks how we're _building_
 it.
 
+Design docs for not-yet-built features live in **`plans/`** (one file per
+feature). Current plans:
+
+- [`plans/checkpoints-and-undo.md`](plans/checkpoints-and-undo.md) — checkpoint
+  primitive + `undo` to make `rollback`/`revert` recoverable (data-loss safety
+  net; foundation for the parked auto-checkpointing feature).
+
 ## Core concept (marker model)
 
 One advanceable marker per vault, `baseline` = "last blessed state".
@@ -328,7 +335,10 @@ Phasing (de-risk hard logic in the easy environment first):
   reviewed" stays put. Auto-_bless_ is deliberately excluded: advancing the
   baseline on a timer would silently absorb unreviewed agent changes, defeating
   the core guarantee. Needs the engine to grow an intermediate commit history +
-  per-checkpoint revert (today revert/rollback only target the baseline).
+  per-checkpoint revert (today revert/rollback only target the baseline). Builds
+  on the checkpoint primitive designed in
+  [`plans/checkpoints-and-undo.md`](plans/checkpoints-and-undo.md) (the
+  timer is just an additive trigger on top of `checkpoint()`/`undo()`).
 - **Mobile push notifications via the service layer** (not the plugin — Obsidian
   mobile is sandboxed, no plugin push API). The CLI/container watcher fires a
   webhook (ntfy / Pushover / Telegram / APNs) on pending changes.
