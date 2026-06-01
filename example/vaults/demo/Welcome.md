@@ -6,9 +6,9 @@ tags: [demo]
 
 This is a throwaway Obsidian vault used to demonstrate **Obsidian Guardian**.
 
-A container is watching this folder. Whenever you change a file here, the
-review note at [[Pending Review]] is regenerated to show exactly what changed
-since the last *blessed* baseline.
+A container is watching this folder. Whenever you change a file here, the review
+note at [[Pending Review]] is regenerated to show exactly what changed since the
+last _blessed_ baseline.
 
 ## Try it
 

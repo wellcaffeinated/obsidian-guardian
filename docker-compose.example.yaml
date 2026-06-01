@@ -2,8 +2,8 @@
 #
 #   docker compose -f docker-compose.example.yaml up --build
 #
-# Then edit any file under ./example/vaults/demo and watch
-# ./example/vaults/demo/_Review/Pending Review.md update.
+# Then edit any file under ./example/vaults/demo and see
+# the changes file update in ./example/vaults/demo/_OG/
 services:
   guardian:
     build:

@@ -19,10 +19,10 @@ the review note updates:
 example/vaults/demo/_OG/changes-<hash>.md
 ```
 
-The `_OG/` folder holds review artifacts; the `<hash>` identifies this *replica*
+The `_OG/` folder holds review artifacts; the `<hash>` identifies this _replica_
 (this git database), so two devices reviewing the same synced vault each write
 their own file and never collide. The note lists every file that changed since
-the last *blessed* baseline, with `+x -y` line counts and tappable
+the last _blessed_ baseline, with `+x -y` line counts and tappable
 `[[wikilinks]]` (so it's reviewable in Obsidian on mobile too).
 
 The container logs each refresh, e.g.:
@@ -35,8 +35,8 @@ The container logs each refresh, e.g.:
 
 ## Accept or undo changes
 
-**Against the running container** — the image ships a short `og` shim that runs as
-your host user, so use `exec` while the watcher is up:
+**Against the running container** — the image ships a short `og` shim that runs
+as your host user, so use `exec` while the watcher is up:
 
 ```sh
 docker compose -f docker-compose.example.yaml exec guardian og status
@@ -58,7 +58,8 @@ so it's correct immediately — even `bless`, which changes no vault files and s
 wouldn't otherwise trigger the watcher.
 
 **From the host** (Node installed, no container): `pnpm build` once, then
-`pnpm og status` / `pnpm og bless` / `pnpm og revert Ideas.md` / `pnpm og rollback`.
+`pnpm og status` / `pnpm og bless` / `pnpm og revert Ideas.md` /
+`pnpm og rollback`.
 
 ## How it's wired
 
@@ -68,12 +69,12 @@ wouldn't otherwise trigger the watcher.
 - The review filename is keyed to a per-replica id (a random UUID) persisted at
   `example/.gitdir/obsidian-guardian/replica-id` — stable across restarts, and
   distinct per git database, with no host probing.
-- `_OG/` and `example/.gitdir/` are git-ignored in this repo; only the seed vault
-  files are committed.
+- `_OG/` and `example/.gitdir/` are git-ignored in this repo; only the seed
+  vault files are committed.
 - The watcher polls (`--poll`) so it reliably sees host edits across the
   bind-mount. It ignores its own `_OG/` writes, so there's no refresh loop.
 
 > The container starts as root and drops to `PUID:PGID` (default `1000:1000`)
 > via `gosu`, so review notes written back to the host are owned by you. If your
-> user differs, run with `PUID=$(id -u) PGID=$(id -g) docker compose -f
-> docker-compose.example.yaml up --build`.
+> user differs, run with
+> `PUID=$(id -u) PGID=$(id -g) docker compose -f docker-compose.example.yaml up --build`.
