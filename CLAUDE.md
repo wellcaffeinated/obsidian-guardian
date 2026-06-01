@@ -18,6 +18,9 @@ feature). Current plans:
 - [`plans/checkpoints-and-undo.md`](plans/checkpoints-and-undo.md) — checkpoint
   primitive + `undo` to make `rollback`/`revert` recoverable (data-loss safety
   net; foundation for the parked auto-checkpointing feature).
+- [`plans/multi-vault-watcher.md`](plans/multi-vault-watcher.md) — one container
+  watching many vaults under a `/vaults` dir (each its own gitDir); engine
+  unchanged, additive CLI multiplexing layer.
 
 ## Core concept (marker model)
 
