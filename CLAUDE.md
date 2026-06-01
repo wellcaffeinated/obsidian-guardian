@@ -21,6 +21,12 @@ feature). Current plans:
 - [`plans/multi-vault-watcher.md`](plans/multi-vault-watcher.md) — one container
   watching many vaults under a `/vaults` dir (each its own gitDir); engine
   unchanged, additive CLI multiplexing layer.
+- [`plans/file-controlled-bless.md`](plans/file-controlled-bless.md) — bless via
+  a synced markdown signal (mobile-triggerable): pinned-snapshot bless-by-oid,
+  sibling-parented checkpoints, rotating immutable signal files with a retention
+  grace, and a monotonic-seq / non-synced high-water-mark protocol for
+  order-independent, sync-agnostic robustness. Consumes a minimal slice of
+  `checkpoints-and-undo`.
 
 ## Core concept (marker model)
 

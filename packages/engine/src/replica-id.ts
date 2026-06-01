@@ -49,6 +49,22 @@ export async function readOrCreateReplicaId(gitDir: string): Promise<string> {
 
 /** The review-note filename for a replica id: `changes-<12-hex-hash>.md`. */
 export function reviewNoteName(replicaId: string): string {
-  const hash = createHash('sha256').update(replicaId).digest('hex').slice(0, 12)
-  return `changes-${hash}.md`
+  return `changes-${replicaHash(replicaId)}.md`
+}
+
+/**
+ * The rotating signal filename for a replica + snapshot:
+ * `changes-<12-hex-replica>-<8-hex-snapshot>.md`. The replica hash keeps two
+ * devices reviewing one synced vault from ever sharing a filename; the short
+ * snapshot oid makes each snapshot's file immutable and distinct.
+ */
+export function changesFileName(
+  replicaId: string,
+  snapshotOid: string,
+): string {
+  return `changes-${replicaHash(replicaId)}-${snapshotOid.slice(0, 8)}.md`
+}
+
+function replicaHash(replicaId: string): string {
+  return createHash('sha256').update(replicaId).digest('hex').slice(0, 12)
 }

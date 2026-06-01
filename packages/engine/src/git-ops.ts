@@ -144,11 +144,76 @@ export async function commit(
 export async function writeTag(ctx: GitCtx, name: string): Promise<void> {
   const oid = await resolveRef(ctx)
   if (!oid) throw new Error('cannot tag: marker has no commit')
-  await git.writeRef({
+  await writeRef(ctx, `refs/tags/${name}`, oid)
+}
+
+/** Point an arbitrary ref at a commit oid (force). */
+export async function writeRef(
+  ctx: GitCtx,
+  ref: string,
+  oid: string,
+): Promise<void> {
+  await git.writeRef({ fs, gitdir: ctx.gitdir, ref, value: oid, force: true })
+}
+
+/**
+ * Commit the current index as a commit with an explicit `parent`, **without**
+ * advancing the baseline marker. Returns the new commit oid (so the caller can
+ * point a side ref at it — e.g. a checkpoint). The tree is built from the index,
+ * so callers must stage the working tree first.
+ */
+export async function commitIndex(
+  ctx: GitCtx,
+  author: Author,
+  message: string,
+  parent: string[],
+): Promise<string> {
+  return git.commit({
     fs,
+    dir: ctx.dir,
     gitdir: ctx.gitdir,
-    ref: `refs/tags/${name}`,
-    value: oid,
-    force: true,
+    message,
+    author: { ...author, timestamp: Math.floor(Date.now() / 1000) },
+    parent,
+    ref: ctx.ref,
+    noUpdateBranch: true,
   })
+}
+
+/**
+ * Commit a pre-existing `tree` oid onto the marker (advancing it), with an
+ * explicit `parent`. Used by bless to set the baseline to a snapshot's tree
+ * without touching the working tree or relying on the index. Returns the oid.
+ */
+export async function commitTree(
+  ctx: GitCtx,
+  author: Author,
+  message: string,
+  tree: string,
+  parent: string[],
+): Promise<string> {
+  return git.commit({
+    fs,
+    dir: ctx.dir,
+    gitdir: ctx.gitdir,
+    message,
+    author: { ...author, timestamp: Math.floor(Date.now() / 1000) },
+    tree,
+    parent,
+  })
+}
+
+/** The tree oid recorded by a commit. */
+export async function readTreeOid(ctx: GitCtx, oid: string): Promise<string> {
+  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  return commit.tree
+}
+
+/** The committer timestamp of a commit, as an ISO-8601 string. */
+export async function readCommitTime(
+  ctx: GitCtx,
+  oid: string,
+): Promise<string> {
+  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  return new Date(commit.committer.timestamp * 1000).toISOString()
 }

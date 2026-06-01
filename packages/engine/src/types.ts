@@ -35,6 +35,29 @@ export interface Status {
 }
 
 /**
+ * A pending review pinned to an immutable snapshot commit. Unlike {@link Status}
+ * (a live diff against the working tree), a SnapshotStatus references a specific
+ * checkpoint by oid so a bless signal can target *exactly the reviewed state*,
+ * even after the working tree has moved on.
+ */
+export interface SnapshotStatus {
+  /** Full 40-char oid of the checkpoint commit — the bless target. */
+  snapshot: string
+  /** Monotonic per-gitDir sequence number for this snapshot. */
+  seq: number
+  /** Current baseline (trusted) commit oid, or null if the repo has no commits. */
+  baseline: string | null
+  /** ISO-8601 timestamp the baseline commit was made, or null. */
+  baselineAt: string | null
+  /** ISO-8601 timestamp this snapshot was computed. */
+  generatedAt: string
+  /** True when the snapshot equals the baseline (nothing to bless). */
+  clean: boolean
+  /** Net change list from baseline to the snapshot, sorted by path. */
+  changes: ChangeEntry[]
+}
+
+/**
  * Identity used when the engine advances the baseline marker (a commit).
  */
 export interface Author {

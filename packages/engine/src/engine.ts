@@ -11,21 +11,43 @@ import { decode, isBinary, lineStats } from './diff-stats'
 import {
   add,
   commit,
+  commitIndex,
+  commitTree,
   type GitCtx,
   init,
   type RawChange,
+  readCommitTime,
   readMarkerBlob,
+  readTreeOid,
   remove,
   resolveRef,
   walkChanges,
+  writeRef,
   writeTag,
 } from './git-ops'
 import { readOrCreateReplicaId, reviewNoteName } from './replica-id'
 import { renderReviewNote } from './review-note'
-import type { Author, ChangeEntry, EngineConfig, Status } from './types'
+import {
+  nextSeq,
+  readBlessHighWater,
+  readSeq,
+  writeBlessHighWater,
+} from './state'
+import type {
+  Author,
+  ChangeEntry,
+  EngineConfig,
+  SnapshotStatus,
+  Status,
+} from './types'
 
 const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
 const MANAGED_END = '# <<< obsidian-guardian managed <<<'
+
+/** Zero-pad a seq so checkpoint refs sort lexicographically by recency. */
+function pad(seq: number): string {
+  return String(seq).padStart(12, '0')
+}
 
 /** Replace (or append) the engine-managed block in an `info/exclude` body. */
 function upsertManagedBlock(existing: string, lines: string[]): string {
@@ -166,6 +188,87 @@ export class ReviewEngine {
   /** Advance the baseline marker to the current state. */
   async bless(): Promise<void> {
     await this.commitAll('chore: bless baseline')
+  }
+
+  /**
+   * Snapshot the current working tree to an immutable checkpoint commit, parented
+   * on the current baseline (a *sibling* of any other checkpoints since the last
+   * bless), and return its oid + a monotonic seq. The checkpoint does **not**
+   * advance the baseline marker. No-op when the tree equals the baseline: returns
+   * the baseline oid and the current seq without creating a commit.
+   *
+   * The seq is the bless protocol's ordering key; the oid is the bless target
+   * (blessable later even if its ref is dropped, since the commit object lingers).
+   */
+  async checkpoint(): Promise<{ oid: string; seq: number; created: boolean }> {
+    const baseline = await resolveRef(this.ctx)
+    const changes = await walkChanges(this.ctx, this.isIgnored)
+    if (changes.length === 0) {
+      return {
+        oid: baseline ?? '',
+        seq: await readSeq(this.gitDir),
+        created: false,
+      }
+    }
+    for (const change of changes) {
+      if (change.workdirOid === null) await remove(this.ctx, change.path)
+      else await add(this.ctx, change.path)
+    }
+    const oid = await commitIndex(
+      this.ctx,
+      this.author,
+      'checkpoint: snapshot',
+      baseline ? [baseline] : [],
+    )
+    const seq = await nextSeq(this.gitDir)
+    await writeRef(this.ctx, `refs/og/checkpoints/${pad(seq)}`, oid)
+    return { oid, seq, created: true }
+  }
+
+  /**
+   * Bless a pinned snapshot: advance the baseline to the snapshot commit's tree,
+   * iff `seq` is strictly greater than the locally-persisted high-water mark.
+   * Otherwise a no-op (returns false) — this is what makes the signal
+   * order-independent and idempotent: stale/duplicate/reordered signals (a lower
+   * or equal seq) can never regress the baseline. The working tree is untouched;
+   * any changes after the snapshot remain pending.
+   */
+  async blessSnapshot(oid: string, seq: number): Promise<boolean> {
+    if (seq <= (await readBlessHighWater(this.gitDir))) return false
+    const tree = await readTreeOid(this.ctx, oid)
+    const baseline = await resolveRef(this.ctx)
+    await commitTree(
+      this.ctx,
+      this.author,
+      `chore: bless snapshot ${oid.slice(0, 8)}`,
+      tree,
+      baseline ? [baseline] : [],
+    )
+    await writeBlessHighWater(this.gitDir, seq)
+    return true
+  }
+
+  /**
+   * Snapshot the current tree and return a {@link SnapshotStatus}: the pinned
+   * snapshot oid + seq, the current baseline (and when it was set), and the net
+   * change list from baseline to the snapshot. The adapter renders this into a
+   * rotating, immutable signal file; `accepted: true` synced back targets
+   * {@link blessSnapshot}.
+   */
+  async snapshot(): Promise<SnapshotStatus> {
+    const { oid, seq } = await this.checkpoint()
+    const changes = await this.buildChanges()
+    changes.sort((a, b) => a.path.localeCompare(b.path))
+    const baseline = await resolveRef(this.ctx)
+    return {
+      snapshot: oid,
+      seq,
+      baseline,
+      baselineAt: baseline ? await readCommitTime(this.ctx, baseline) : null,
+      generatedAt: new Date().toISOString(),
+      clean: changes.length === 0,
+      changes,
+    }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */
