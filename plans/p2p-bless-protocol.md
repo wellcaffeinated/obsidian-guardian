@@ -137,6 +137,24 @@ backing `fs`:
 - **Mobile** → an **IndexedDB-backed `fs.promises`** (LightningFS or a small
   equivalent).
 
+**Implementation mechanism — a composite routing `fs` (chosen for Phase 1).**
+isomorphic-git wants *one* `fs` for both worktree and gitdir. Rather than rewrite
+the engine to a from-scratch object-db, inject a single `FsClient` that **routes
+by path**: paths under the worktree → the worktree backend, paths under the
+gitdir → the gitdir backend. The existing, tested engine/git-ops logic is reused
+**unchanged**; only the injected `fs` differs per platform:
+
+| | worktree backend | gitdir backend |
+| --- | --- | --- |
+| Desktop/CLI | `node:fs` | `node:fs` (app-data folder) |
+| Mobile | `app.vault.adapter` (as `fs.promises`) | LightningFS / IndexedDB |
+
+So `WorkingTree` and `ObjectStore` are realised as the **two backends behind the
+router**, not a hand-rolled git. Engine work (Phase 1): thread an injected `fs`
+through `git-ops`/`engine` (default `node:fs`), converting the few remaining sync
+fs calls to async (mobile adapters are async-only). The from-scratch Merkle KV
+stays a deep fallback only if LightningFS fails the iOS spike.
+
 Why IndexedDB and *not* obsidian-git's adapter-files-in-the-vault approach: those
 files **leak to iCloud/Syncthing** (which, unlike Obsidian Sync, don't skip
 dot-folders), and syncing per-device git stores would collide their mutable refs
