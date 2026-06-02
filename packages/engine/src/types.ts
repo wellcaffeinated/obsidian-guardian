@@ -60,6 +60,39 @@ export interface SnapshotStatus {
 }
 
 /**
+ * One device-local checkpoint: an immutable snapshot commit parented on the
+ * baseline-at-creation, identified by its commit oid and monotonic seq.
+ */
+export interface Checkpoint {
+  /** Full 40-char checkpoint commit oid. */
+  oid: string
+  /** Monotonic per-gitDir sequence number. */
+  seq: number
+  /** ISO-8601 commit time of the checkpoint. */
+  when: string
+}
+
+/** A checkpoint plus the net changes from it to the current working tree. */
+export interface TimelineEntry extends Checkpoint {
+  /** Net change list from this checkpoint → the working tree, sorted by path. */
+  changes: ChangeEntry[]
+}
+
+/**
+ * The review timeline the panel renders: the live `current` diff
+ * (baseline→working tree), the `baseline` marker, and the device-local
+ * `checkpoints` (newest seq first), each carrying its diff to the working tree.
+ */
+export interface Timeline {
+  /** Baseline (last blessed) commit oid + its commit time, or nulls if none. */
+  baseline: { oid: string | null; when: string | null }
+  /** Pending changes from baseline → the working tree, sorted by path. */
+  current: ChangeEntry[]
+  /** Device-local checkpoints, newest seq first. */
+  checkpoints: TimelineEntry[]
+}
+
+/**
  * Identity used when the engine advances the baseline marker (a commit).
  */
 export interface Author {

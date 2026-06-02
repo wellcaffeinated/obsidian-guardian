@@ -25,6 +25,7 @@ export {
   type BlessRecord,
   type ChangeEntry,
   type ChangeKind,
+  type Checkpoint,
   type ClientId,
   DELETED,
   type DeviceState,
@@ -37,4 +38,6 @@ export {
   type Seq,
   type SnapshotStatus,
   type Status,
+  type Timeline,
+  type TimelineEntry,
 } from './types'

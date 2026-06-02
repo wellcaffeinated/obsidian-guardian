@@ -148,16 +148,19 @@ export async function writeFlatTree(
 }
 
 /**
- * Detect changes between the marker tree and the work-tree by **content**
- * (hashing each work-tree file), so same-size edits are never missed and no
- * index stat-cache shortcut can hide a change. `isIgnored` is applied before
- * hashing, so ignored files are cheap to skip.
+ * Detect changes between a base tree and the work-tree by **content** (hashing
+ * each work-tree file), so same-size edits are never missed and no index
+ * stat-cache shortcut can hide a change. `isIgnored` is applied before hashing,
+ * so ignored files are cheap to skip. `fromRef` defaults to the baseline marker
+ * but may be any commit-ish (e.g. a checkpoint oid) to diff against an arbitrary
+ * snapshot.
  */
 export async function walkChanges(
   ctx: GitCtx,
   isIgnored: (path: string) => boolean,
+  fromRef: string = ctx.ref,
 ): Promise<RawChange[]> {
-  const marker = await resolveRef(ctx)
+  const marker = await resolveRef(ctx, fromRef)
   const changes: RawChange[] = []
   // Collect via a side-effect accumulator rather than git.walk's reduced
   // return value, which is not a reliable flat list across versions.
@@ -165,7 +168,7 @@ export async function walkChanges(
     fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
-    trees: marker ? [TREE({ ref: ctx.ref }), WORKDIR()] : [WORKDIR()],
+    trees: marker ? [TREE({ ref: fromRef }), WORKDIR()] : [WORKDIR()],
     map: async (filepath, entries) => {
       if (filepath === '.') return undefined
       const head = marker ? entries[0] : null
@@ -191,12 +194,17 @@ export async function walkChanges(
   return changes
 }
 
-/** Read a file's bytes + blob oid from the marker commit, or null if absent. */
+/**
+ * Read a file's bytes + blob oid from a commit, or null if absent. `fromRef`
+ * defaults to the baseline marker but may be any commit-ish (e.g. a checkpoint
+ * oid) to read the path's content at an arbitrary snapshot.
+ */
 export async function readMarkerBlob(
   ctx: GitCtx,
   filepath: string,
+  fromRef: string = ctx.ref,
 ): Promise<{ blob: Uint8Array; oid: string } | null> {
-  const commit = await resolveRef(ctx)
+  const commit = await resolveRef(ctx, fromRef)
   if (!commit) return null
   try {
     const { blob, oid } = await git.readBlob({
@@ -307,6 +315,23 @@ export async function commitTree(
     tree,
     parent,
   })
+}
+
+/**
+ * List the leaf names of the checkpoint refs (`refs/og/checkpoints/<padded-seq>`).
+ * Returns just the padded-seq leaf for each, or `[]` when none exist. Resolve a
+ * leaf to its commit with `resolveRef(ctx, 'refs/og/checkpoints/<leaf>')`.
+ */
+export async function listCheckpointRefs(ctx: GitCtx): Promise<string[]> {
+  try {
+    return await git.listRefs({
+      fs: ctx.fs,
+      gitdir: ctx.gitdir,
+      filepath: 'refs/og/checkpoints',
+    })
+  } catch {
+    return []
+  }
 }
 
 /** The tree oid recorded by a commit. */

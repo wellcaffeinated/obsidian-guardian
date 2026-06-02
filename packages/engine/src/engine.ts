@@ -19,6 +19,7 @@ import {
   type GitCtx,
   hashBlob,
   init,
+  listCheckpointRefs,
   type RawChange,
   readCommitTime,
   readFlatTree,
@@ -57,6 +58,7 @@ import {
   type Author,
   type BlessRecord,
   type ChangeEntry,
+  type Checkpoint,
   DELETED,
   type DeviceState,
   type EngineConfig,
@@ -64,6 +66,8 @@ import {
   type Manifest,
   type SnapshotStatus,
   type Status,
+  type Timeline,
+  type TimelineEntry,
 } from './types'
 
 const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
@@ -524,6 +528,53 @@ export class ReviewEngine {
     return { status, fileName, content }
   }
 
+  /**
+   * List this device's checkpoints (the `refs/og/checkpoints/*` snapshot commits),
+   * newest seq first. Device-local and never synced; cheap (refs + commit times,
+   * no diffing). For per-checkpoint diffs use {@link timeline}.
+   */
+  async listCheckpoints(): Promise<Checkpoint[]> {
+    const leaves = await listCheckpointRefs(this.ctx)
+    const out: Checkpoint[] = []
+    for (const leaf of leaves) {
+      const oid = await resolveRef(this.ctx, `refs/og/checkpoints/${leaf}`)
+      if (!oid) continue
+      out.push({
+        oid,
+        seq: Number(leaf),
+        when: await readCommitTime(this.ctx, oid),
+      })
+    }
+    out.sort((a, b) => b.seq - a.seq)
+    return out
+  }
+
+  /**
+   * The full review timeline for the panel: the live `current` diff
+   * (baseline→working tree), the `baseline` marker (oid + time), and every
+   * device-local checkpoint (newest seq first) carrying its own diff to the
+   * working tree (what restoring it would change). Pure read; no mutation.
+   */
+  async timeline(): Promise<Timeline> {
+    const baseline = await resolveRef(this.ctx)
+    const current = await this.buildChanges()
+    current.sort((a, b) => a.path.localeCompare(b.path))
+    const checkpoints: TimelineEntry[] = []
+    for (const cp of await this.listCheckpoints()) {
+      const changes = await this.buildChanges(cp.oid)
+      changes.sort((a, b) => a.path.localeCompare(b.path))
+      checkpoints.push({ ...cp, changes })
+    }
+    return {
+      baseline: {
+        oid: baseline,
+        when: baseline ? await readCommitTime(this.ctx, baseline) : null,
+      },
+      current,
+      checkpoints,
+    }
+  }
+
   /** Restore a single path from the baseline (or delete it if newly added). */
   async revert(path: string): Promise<void> {
     await this.restore(path)
@@ -534,6 +585,19 @@ export class ReviewEngine {
     const changes = await walkChanges(this.ctx, this.isIgnored)
     for (const change of changes) {
       await this.restore(change.path)
+    }
+  }
+
+  /**
+   * Restore the whole work-tree to a checkpoint commit (by oid). Like
+   * {@link rollback} but targeting an arbitrary device-local snapshot instead of
+   * the baseline; the baseline marker is untouched, so any net difference between
+   * the checkpoint and the baseline remains pending afterward.
+   */
+  async restoreCheckpoint(oid: string): Promise<void> {
+    const changes = await walkChanges(this.ctx, this.isIgnored, oid)
+    for (const change of changes) {
+      await this.restore(change.path, oid)
     }
   }
 
@@ -552,10 +616,17 @@ export class ReviewEngine {
     await commit(this.ctx, this.author, message)
   }
 
-  /** Restore one path's content from the marker, keeping the index in sync. */
-  private async restore(path: string): Promise<void> {
+  /**
+   * Restore one path's content from a commit (default: the baseline marker),
+   * keeping the index in sync. Writing the baseline bytes directly (not
+   * `git.checkout`) avoids isomorphic-git's stat-skip.
+   */
+  private async restore(
+    path: string,
+    fromRef: string = this.markerRef,
+  ): Promise<void> {
     const abs = join(this.vaultPath, path)
-    const blob = await readMarkerBlob(this.ctx, path)
+    const blob = await readMarkerBlob(this.ctx, path, fromRef)
     if (blob) {
       await this.fs.promises.mkdir(dirname(abs), { recursive: true })
       await this.fs.promises.writeFile(abs, blob.blob)
@@ -596,9 +667,15 @@ export class ReviewEngine {
     }
   }
 
-  /** Build the change list, including exact-content rename detection. */
-  private async buildChanges(): Promise<ChangeEntry[]> {
-    const raw = await walkChanges(this.ctx, this.isIgnored)
+  /**
+   * Build the change list (with exact-content rename detection) from a base ref
+   * to the working tree. `fromRef` defaults to the baseline marker; pass a
+   * checkpoint oid to diff against an arbitrary snapshot.
+   */
+  private async buildChanges(
+    fromRef: string = this.markerRef,
+  ): Promise<ChangeEntry[]> {
+    const raw = await walkChanges(this.ctx, this.isIgnored, fromRef)
     const adds = raw.filter((c) => c.headOid === null)
     const deletes = raw.filter((c) => c.workdirOid === null)
     const modifies = raw.filter(
@@ -641,7 +718,7 @@ export class ReviewEngine {
 
     for (const change of deletes) {
       if (matched.has(change.path)) continue
-      const before = await readMarkerBlob(this.ctx, change.path)
+      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
       changes.push({
         path: change.path,
         kind: 'delete',
@@ -650,7 +727,7 @@ export class ReviewEngine {
     }
 
     for (const change of modifies) {
-      const before = await readMarkerBlob(this.ctx, change.path)
+      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
       const after = await this.readWorkdir(change.path)
       changes.push({
         path: change.path,

@@ -148,9 +148,38 @@ packages/
   - [ ] **Crash republish gap:** `recover()` re-applies blesses but does not yet
         re-derive + republish *our own* `bless-<id>.json` from baseline's
         parent→baseline diff if it went missing (spec §recovery step 3).
-- [ ] **Phase 3 — Plugin integration.** Wire engine + coordination into the
-  Phase-G panel (real data); per-device activation; event-driven **incremental**
-  hashing (mandatory — full rescans are too slow on mobile); settings.
+- [~] **Phase 3 — Plugin integration.** _First slice ✅ green + live._ The
+  Phase-G panel now renders **real engine data** end-to-end; the live smoke
+  (`pnpm test:plugin`) passes on the new design (inactive→activate→bless flow,
+  asserted via the synced `_OG/sync/` signal files), and the populated panel is
+  verified by an overlay screenshot.
+  - [x] **Engine timeline API.** `timeline()` → `{ baseline, current,
+        checkpoints[] }` (each checkpoint carries its diff to the working tree);
+        `listCheckpoints()` (reads `refs/og/checkpoints/*`); `restoreCheckpoint(oid)`
+        (rollback to an arbitrary snapshot, baseline untouched). `walkChanges`/
+        `readMarkerBlob`/`buildChanges`/`restore` generalised to an arbitrary
+        `fromRef` (default = baseline). Types `Checkpoint`/`Timeline`/
+        `TimelineEntry` exported. 4 new engine tests (`test/timeline.test.ts`).
+  - [x] **Plugin wiring** (`main.ts`): resolves config + injects `node:fs`,
+        per-device **activation gate** (`isOnboarded()` — never onboards on
+        load), `recover()` on layout-ready, debounced **refresh** on
+        `vault.on(modify/create/delete/rename)`, a `_OG/sync/` watcher →
+        debounced **`ingest()`**, first-activation auto-bless (settle host
+        config writes), commands (open/activate/refresh/checkpoint/bless/rollback),
+        ribbon, settings tab. Implements `ReviewController` + `SettingsHost`.
+  - [x] **Real panel** (`review-view.ts`): driven by a `ReviewController`
+        interface (no plugin import / no cycle); renders inactive CTA, the
+        Current card (Accept=bless / Undo=rollback / per-file revert / clickable
+        md paths), collapsible checkpoint History + Baseline marker, peer
+        presence header. View-model built by pure `buildPanelData()` in
+        `format.ts` (DOM-free test seam; 3 new plugin tests).
+  - [x] **Settings tab** (`settings.ts`): gitDir / reviewFolder / marker /
+        ignore / author; `hide()` persists + rebuilds the engine.
+  - [ ] **Still TODO:** event-driven **incremental** hashing (today `refresh()`
+        re-hashes the whole tree on each debounce — full rescans are too slow on
+        mobile; the engine needs a stat-cache / path-scoped re-hash); a
+        confirm-modal gate on rollback/restore; richer peer/divergence UI;
+        broader live assertions (restore-checkpoint, multi-device ingest).
 - [ ] **Phase 4 — Mobile (Android).** IndexedDB `ObjectStore`; Buffer polyfill
   via tsdown inject; the spike (isomorphic-git + IndexedDB round-trip); drop
   `isDesktopOnly`; sideload + Syncthing round-trip across the user's devices.
@@ -161,35 +190,39 @@ packages/
 
 **State:** branch `plan/p2p-bless-protocol`, worktree `.worktrees/p2p-bless`
 (install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
-**Phase-2 coordination core ✅** (engine-only). All gates green: `pnpm -r test`
-= **74** (49 engine / 9 cli / 16 plugin), `pnpm -r typecheck`, `pnpm knip`,
-engine `pnpm build`. Coordination commits on top of `98bee51`.
+**Phase-2 coordination core ✅** + **Phase-3 plugin-integration first slice ✅**
+(real-data panel wired + live). All gates green: `pnpm -r test` = **81**
+(53 engine / 9 cli / 19 plugin), `pnpm -r typecheck`, `pnpm lint`, `pnpm knip`,
+engine + plugin `pnpm build`, and `pnpm test:plugin` (live headless smoke on the
+new design) all pass.
 
 **Next step — choose:**
-1. _Recommended:_ **Phase 3 — plugin integration.** Wire the real engine
-   coordination API into the Phase-G panel: per-device activation (gitDir
-   existence = activation flag), `vault.on(modify/create/delete/rename)` →
-   **incremental** re-hash (full rescans too slow on mobile) → debounced
-   `checkpoint()`/`refresh`, a watcher on `_OG/sync/` → debounced `ingest()`,
-   `recover()` on layout-ready, and Bless/Rollback buttons calling
-   `engine.bless()` / revert. New engine API to consume: `bless()→BlessRecord`,
-   `applyBless`, `ingest`, `recover` (`packages/engine/src/index.ts`).
-2. Or **trim old machinery** now that the new path exists: `review-note.ts`,
-   `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/`blessSnapshot`,
-   the rotating-file bits of `replica-id.ts`, and `state.ts`'s
-   `bless-hwm`/`snapshot-seq`. **Caution:** the CLI (`watch.ts`/`cli.ts`) +
-   plugin still call these; rip them out only with replacements wired, or those
-   green packages break. Lower urgency — the old machinery is inert, just unused
-   by the new flow.
+1. _Recommended:_ **Phase 3 polish — incremental hashing.** Today the plugin's
+   `refresh()` calls `engine.timeline()`, which re-hashes the **whole** vault
+   (`walkChanges` content-hashes every non-ignored file) on every debounced
+   edit — fine on desktop, too slow on mobile/large vaults. Add a path-scoped /
+   stat-cached re-hash so a `vault.on(modify)` only re-hashes the touched path.
+   This is the gating work for Phase 4 (mobile). Also: a confirm-modal on
+   rollback/restore, and surface `checkpoint`/`restoreCheckpoint` more in the UI.
+2. Or **trim old machinery** now that the new path exists and is the product:
+   `review-note.ts`, `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/
+   `blessSnapshot`, the rotating-file bits of `replica-id.ts`, and `state.ts`'s
+   `bless-hwm`/`snapshot-seq`. **Caution:** the CLI (`watch.ts`/`cli.ts`) still
+   calls these; rip them out only with the CLI updated or those green packages
+   break. The plugin no longer uses any of it.
 3. Or finish **retention/GC** + the **crash-republish** gap (both noted under
-   Phase 2 above).
+   Phase 2 above), or **Phase 4 — Mobile** (after incremental hashing).
 
-**Working references:** coordination core = `packages/engine/src/{engine,
-git-ops,signal-store,local-state,types,defaults}.ts`; tests =
-`packages/engine/test/coordination.test.ts` (the convergence + ingest proofs).
-GUI stub = `packages/plugin/src/{main,review-view}.ts` + `styles.css` (mock
-data, v4); screenshot with **`pnpm shot:stub [out.png]`** (overlay workaround —
-see memory `headless-screenshot-deferred-view`). CLI (`packages/cli`) is legacy.
+**Working references:** engine timeline API = `packages/engine/src/engine.ts`
+(`timeline`/`listCheckpoints`/`restoreCheckpoint`) + `git-ops.ts`
+(`walkChanges`/`readMarkerBlob` now take a `fromRef`) + `test/timeline.test.ts`.
+Plugin = `packages/plugin/src/{main,review-view,format,settings}.ts` (real data;
+`main.ts` is the `ReviewController`/`SettingsHost`; `format.buildPanelData` is
+the DOM-free view-model seam). Live loop = `scripts/smoke-plugin.sh`
+(`pnpm test:plugin`, asserts via `_OG/sync/` signal files); panel screenshot via
+the overlay workaround (`pnpm shot:stub`; see memory
+`headless-screenshot-deferred-view`). Coordination core unchanged. CLI
+(`packages/cli`) is legacy.
 
 **Watch-outs:**
 - The signal folder is `_OG/sync/`; `_OG/` is git-ignored, so signals **sync
