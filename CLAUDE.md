@@ -133,6 +133,36 @@ packages/
 - [ ] **Phase 5 — Polish.** Inline diffs, peer/sync UX, packaging (later;
   community store is low priority).
 
+### Resume here (session handoff)
+
+**State:** branch `plan/p2p-bless-protocol`, worktree `.worktrees/p2p-bless`
+(install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅; all
+gates green (`pnpm test` = 61, `pnpm typecheck`, `pnpm build`, `pnpm lint`,
+`pnpm knip`). Last commits: `98bee51`/`9b12e93`/`9410576`.
+
+**Next step — choose:**
+1. _Recommended:_ **Phase 2 coordination** — the differentiated core, and it
+   tells us exactly which old machinery to delete. Build the synced `_OG/sync/`
+   JSON (`device-<id>.json`, `bless-<id>.json`), `applyBless` (content gate +
+   arrival defer), debounced ingest, crash-recovery, retention, re-bootstrap.
+   Spec: **[`plans/p2p-bless-protocol.md`](plans/p2p-bless-protocol.md)** §§3–8
+   (data shapes + pseudo-code are written there — follow them).
+2. Or finish Phase 1: the **composite routing `fs`** (plan §Storage model) +
+   trim `replica-id.ts`/`state.ts`/`changes-file.ts`/`review-note.ts` and the
+   engine's `snapshot`/`writeSnapshot`/`blessSnapshot` (old file-controlled-bless
+   machinery the new design replaces).
+
+**Working references:** engine core = `packages/engine/src/{engine,git-ops,
+types}.ts` (now `fs`-injected); GUI stub = `packages/plugin/src/{main,
+review-view}.ts` + `styles.css` (mock data, v4). Screenshot the panel with
+**`pnpm shot:stub [out.png]`** (overlay workaround — real plugin mounts fine; see
+memory `headless-screenshot-deferred-view`). CLI (`packages/cli`) is legacy.
+
+**Watch-outs:** engine still pulls `node:fs` transitively via the old
+`replica-id`/`state` helpers (removed in Phase 2) and uses `node:path` (small
+swap later) — so it's not yet 100% mobile-clean. Test the plugin only in the
+headless container, never the real vault.
+
 ## Locked decisions
 
 - Symmetric, **server-less**: every device runs the engine over its own
