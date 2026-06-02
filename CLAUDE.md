@@ -113,10 +113,19 @@ packages/
         typecheck, build, lint, knip. (Interim: `replica-id.ts`/`state.ts` still
         import `node:fs/promises` — they're old-signal-file machinery removed in
         Phase 2; `node:path` swap is a small follow-up.)
-  - [ ] **Composite routing `fs`** — one `PromiseFsClient` routing
-        worktree-paths vs gitdir-paths to two backends (both `node:fs` on
-        desktop; worktree→adapter / gitdir→IndexedDB on mobile). See plan
-        §Storage model.
+  - [x] **Composite routing `fs`** (`routing-fs.ts`, `createRoutingFs`) — one
+        `PromiseFsClient` that dispatches each call by path: paths under `gitDir`
+        → the device-local object-store backend, everything else → the working
+        tree. Paths pass through verbatim (each backend interprets the absolute
+        path, as today on desktop); `symlink` routes by its 2nd arg (the link
+        location). On desktop both backends are `node:fs`; on mobile they become
+        worktree→`app.vault.adapter` / gitdir→IndexedDB without touching the
+        engine. Exported from `index.ts`. 2 tests (`test/routing-fs.test.ts`):
+        spy-wrapped backends prove the routing contract (every gitdir path hits
+        the gitdir backend, every vault path the worktree backend) + full
+        onboard→bless parity through the router. NOT yet wired into the plugin
+        (desktop still injects `node:fs` directly); the plugin swap is Phase 4,
+        when the real mobile backends exist. See plan §Storage model.
   - [ ] **Model shifts** (likely fold into Phase 2): baseline advanced per-path;
         trim old machinery (`snapshot`/`writeSnapshot`/`changes-file`/
         `replica-id`/`state`/review-note).
@@ -218,20 +227,32 @@ packages/
 **State:** branch `plan/p2p-bless-protocol`, worktree `.worktrees/p2p-bless`
 (install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
 **Phase-2 coordination core ✅** + **Phase-3 plugin integration ✅** (real-data
-panel + **event-driven incremental hashing**, wired + live). All gates green:
-`pnpm -r test` = **89** (61 engine / 9 cli / 19 plugin), `pnpm -r typecheck`,
-`pnpm lint`, `pnpm knip`, engine + plugin `pnpm build`, and `pnpm test:plugin`
-(live headless smoke on the new design) all pass.
+panel + **event-driven incremental hashing**, wired + live) + **composite routing
+`fs` ✅** (Phase-1 close-out). Gates: `pnpm -r test` = **90** (63 engine / 9 cli /
+18 plugin), `pnpm -r typecheck`, `pnpm knip`, engine + plugin `pnpm build`, and
+`pnpm test:plugin` (live headless smoke) all pass. `pnpm lint` has 2 pre-existing
+errors in `review-view.ts` (see "Latest increment" below) — not from this work.
+
+**Latest increment:** the **composite routing `fs`** (`createRoutingFs`,
+`packages/engine/src/routing-fs.ts` + `test/routing-fs.test.ts`) is built, tested,
+and exported — the Phase-1 open item is now done. Suite: **90** (63 engine / 9
+cli / 18 plugin). _Caveat:_ `pnpm lint` has **2 pre-existing errors** in
+`packages/plugin/src/review-view.ts:405-407` ("function should not return a value
+because its return type is void", in the binary-diff branch) — unrelated to the
+routing fs; trivially fixable (`return ctx(...)` → `{ ctx(...); return }`).
 
 **Next step — choose:**
-1. _Recommended:_ **Phase 4 — Mobile (Android).** Incremental hashing (the
-   desktop-perf prerequisite) is done, so the engine is ready for the mobile
-   `ObjectStore`. Spike isomorphic-git over IndexedDB (Buffer polyfill via tsdown
-   inject), a composite routing `fs` (worktree→`app.vault.adapter`,
-   gitdir→IndexedDB), drop `isDesktopOnly`, then a real Syncthing round-trip
-   across the user's devices. See plan §Storage model + the Phase-1 "composite
-   routing fs" item (still open). Smaller follow-ups first if preferred: a
-   confirm-modal on rollback/restore, persisting the `workIndex` across reloads.
+1. _Recommended:_ **Phase 4 — Mobile (Android).** Incremental hashing + the
+   composite routing `fs` (both prerequisites) are done, so the engine is ready
+   for the mobile `ObjectStore`. Remaining: build the two mobile backends behind
+   the router — worktree→`app.vault.adapter` (as `fs.promises`),
+   gitdir→isomorphic-git over IndexedDB (LightningFS) with the **Buffer polyfill
+   via tsdown inject** — wire the plugin to construct the engine via
+   `createRoutingFs` (desktop: both `node:fs`; a behaviour-neutral seam swap),
+   spike the isomorphic-git+IndexedDB round-trip, drop `isDesktopOnly`, then a
+   real Syncthing round-trip across the user's devices. See plan §Storage model.
+   Smaller follow-ups if preferred: persist the `workIndex` across reloads; fix
+   the pre-existing lint errors above.
 2. Or **trim old machinery** now that the new path exists and is the product:
    `review-note.ts`, `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/
    `blessSnapshot`, the rotating-file bits of `replica-id.ts`, and `state.ts`'s

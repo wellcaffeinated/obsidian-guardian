@@ -12,6 +12,7 @@ export {
   reviewNoteName,
 } from './replica-id'
 export { renderReviewNote } from './review-note'
+export { createRoutingFs, type RoutingFsOptions } from './routing-fs'
 export {
   ownSignalFiles,
   readBlessRecords,
