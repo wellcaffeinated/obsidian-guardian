@@ -99,15 +99,17 @@ packages/
 
 ## Phased plan (not exhaustive up-front; update at each milestone)
 
-- [~] **Phase G — GUI stub first.** A plugin detached from functionality that
-  renders the envisioned panel (diff list + per-file revert, bless, checkpoint,
-  rollback, checkpoint history, sync/peer status) from **mock data**.
-  Screenshot via `pnpm screenshot:plugin`, iterate on the design with the user
-  until the shape of the data the engine must expose is clear. _← we are here._
-- [ ] **Phase 1 — Engine storage refactor.** Introduce `WorkingTree` +
+- [x] **Phase G — GUI stub first.** A plugin detached from functionality
+  (`packages/plugin/src/{main,review-view}.ts` + `styles.css`) rendering the
+  panel from **mock data**: time-ordered timeline (Current card → HISTORY →
+  checkpoints + baseline marker), per-file diff + revert, Accept/Undo inside the
+  current card, `a..b` comparison labels. Iterated with the user to v4.
+  Screenshot via **`pnpm shot:stub`** (overlay workaround for Obsidian deferred
+  views — see memory). Settles the data the engine must expose.
+- [~] **Phase 1 — Engine storage refactor.** Introduce `WorkingTree` +
   `ObjectStore` interfaces; port the existing isomorphic-git/node-fs logic onto
   them; baseline becomes a commit ref advanced per-path; add a `checkpoints`
-  history; content-gated diff. Keep desktop green via Vitest.
+  history; content-gated diff. Keep desktop green via Vitest. _← we are here._
 - [ ] **Phase 2 — Coordination layer.** Synced `_OG/sync/` JSON
   (`bless-<id>` / `device-<id>`), `applyBless` (content gate + arrival defer),
   debounced ingest, crash-recovery (idempotent re-ingest), retention (last-N
@@ -138,3 +140,7 @@ packages/
 - **Reviewing is opt-in per device** (the local store's existence is the
   non-synced activation flag); installing the plugin doesn't auto-start a
   competing history.
+- **Auto-checkpointing is a toggleable setting** (off by default) with a
+  **configurable frequency**; the manual `Checkpoint` button is always
+  available. Auto-checkpoint creates snapshots only — it never advances the
+  `baseline` (no auto-bless). Retention prunes old auto-checkpoints.

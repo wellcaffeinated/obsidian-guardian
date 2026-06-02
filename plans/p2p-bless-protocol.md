@@ -308,6 +308,11 @@ checkpoint():                       # debounced on change, or user-invoked
 
 No network. Grows the restore-point timeline + publishes `head`.
 
+**Triggers:** the manual `Checkpoint` button always; plus an **optional
+auto-checkpoint** (toggleable setting, configurable frequency, off by default) on
+a debounce. Auto-checkpoint creates snapshots only — it **never** advances
+`baseline` (no auto-bless). Retention (§7) prunes old auto-checkpoints.
+
 ### 2. Bless (approve current checkpoint on THIS device)
 
 ```
