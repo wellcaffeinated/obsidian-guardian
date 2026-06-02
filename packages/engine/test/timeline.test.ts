@@ -97,6 +97,67 @@ describe('timeline', () => {
   })
 })
 
+describe('incremental work-index (touch / rescan)', () => {
+  it('touch() makes status match a full scan after a direct edit', async () => {
+    const { engine, vault } = await freshEngine({
+      'a.md': 'one\n',
+      'b.md': 'b\n',
+    })
+    // Prime the index via a first touch, then edit + touch only the changed path.
+    await write(vault, 'a.md', 'two\n')
+    await engine.touch('a.md')
+    const s = await engine.status()
+    expect(s.clean).toBe(false)
+    expect(s.changes.map((c) => `${c.kind} ${c.path}`)).toEqual(['modify a.md'])
+  })
+
+  it('touch() tracks adds and deletes', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'c.md', 'new\n')
+    await engine.touch('c.md') // primes + records the add
+    await unlink(join(vault, 'a.md'))
+    await engine.touch('a.md') // records the delete
+    const s = await engine.status()
+    expect(s.changes.map((c) => `${c.kind} ${c.path}`).sort()).toEqual([
+      'add c.md',
+      'delete a.md',
+    ])
+  })
+
+  it('a primed index ignores out-of-band writes until rescan() reconciles', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await engine.touch('a.md') // prime the index (a.md = one)
+    // Direct disk write that bypasses touch(): the index is intentionally stale.
+    await write(vault, 'a.md', 'two\n')
+    expect((await engine.status()).clean).toBe(true) // stale index, by contract
+    await engine.rescan()
+    const s = await engine.status()
+    expect(s.clean).toBe(false)
+    expect(s.changes.map((c) => c.path)).toEqual(['a.md'])
+  })
+
+  it('checkpoint diffs use the primed index too', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'two\n')
+    await engine.touch('a.md')
+    const cp = await engine.checkpoint()
+    await write(vault, 'a.md', 'three\n')
+    await engine.touch('a.md')
+    const tl = await engine.timeline()
+    expect(tl.checkpoints[0]?.oid).toBe(cp.oid)
+    expect(tl.checkpoints[0]?.changes.map((c) => c.path)).toEqual(['a.md'])
+  })
+
+  it('bless() clears pending and re-syncs the index from disk', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'two\n')
+    await engine.touch('a.md')
+    expect((await engine.status()).clean).toBe(false)
+    await engine.bless()
+    expect((await engine.status()).clean).toBe(true)
+  })
+})
+
 describe('restoreCheckpoint', () => {
   it('resets the working tree to a checkpoint without moving the baseline', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })

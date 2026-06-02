@@ -21,12 +21,14 @@ import {
   init,
   listCheckpointRefs,
   type RawChange,
+  rawChangesBetween,
   readCommitTime,
   readFlatTree,
   readMarkerBlob,
   readTreeOid,
   remove,
   resolveRef,
+  scanWorkdirHashes,
   walkChanges,
   writeBlob,
   writeFlatTree,
@@ -109,6 +111,13 @@ export class ReviewEngine {
   private readonly configReplicaId: string | undefined
   private resolvedReplicaId: string | undefined
   private resolvedReviewNoteName: string | undefined
+  /**
+   * Incremental working-tree content index (`path → blob oid`), primed lazily by
+   * a full scan and then maintained per-path via {@link touch}. `null` = not
+   * primed (next read re-scans). The hot path (edit → refresh) re-hashes only the
+   * touched path instead of the whole vault — mandatory for large/mobile vaults.
+   */
+  private workIndex: Map<string, string> | null = null
 
   constructor(config: EngineConfig) {
     this.fs = config.fs
@@ -274,6 +283,10 @@ export class ReviewEngine {
       blessedAt: new Date().toISOString(),
     }
     await this.applyBless(rec)
+    // The manifest came from the authoritative full walk; drop the incremental
+    // index so the next read re-primes from disk (no phantom diff if an edit
+    // event was ever missed). bless is user-initiated and rare — one rescan is fine.
+    this.workIndex = null
     state.blessSeq = rec.seq
     state.observedSeq[self] = rec.seq
     await writeLocalState(this.fs, this.gitDir, state)
@@ -639,6 +652,54 @@ export class ReviewEngine {
       }
       await remove(this.ctx, path)
     }
+    // Keep the incremental index consistent with the bytes we just wrote/removed.
+    if (this.workIndex !== null) await this.touch(path)
+  }
+
+  /** Raw changes from the primed index against any base ref — no full-tree reads. */
+  private async rawChangesFromIndex(
+    index: Map<string, string>,
+    fromRef: string,
+  ): Promise<RawChange[]> {
+    const fromCommit = await resolveRef(this.ctx, fromRef)
+    const fromEntries = fromCommit
+      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, fromCommit))
+      : new Map<string, FlatEntry>()
+    return rawChangesBetween(fromEntries, index)
+  }
+
+  /** The work-index, primed by a full scan on first use; maintained by {@link touch}. */
+  private async ensureIndex(): Promise<Map<string, string>> {
+    if (this.workIndex === null) {
+      this.workIndex = await scanWorkdirHashes(this.ctx, this.isIgnored)
+    }
+    return this.workIndex
+  }
+
+  /**
+   * Record a single path's current content into the incremental index (re-hash
+   * it, or drop it if gone). Adapters call this on each vault edit event so the
+   * next {@link status}/{@link timeline} re-hashes only the touched path, never
+   * the whole tree. The first touch primes the index with one full scan; after
+   * that the engine trusts touch()/{@link rescan} to keep it current (the caller
+   * owns routing every edit through one of them).
+   */
+  async touch(path: string): Promise<void> {
+    if (this.isIgnored(path)) return
+    const index = await this.ensureIndex()
+    const bytes = await this.readWorkdir(path)
+    if (bytes === null) index.delete(path)
+    else index.set(path, await hashBlob(bytes))
+  }
+
+  /**
+   * Discard the incremental index and rebuild it from a full disk scan — the
+   * reconciliation path for any edits the adapter's events may have missed (e.g.
+   * external sync writes). The authoritative, slow path; wire it to an explicit
+   * "Refresh".
+   */
+  async rescan(): Promise<void> {
+    this.workIndex = await scanWorkdirHashes(this.ctx, this.isIgnored)
   }
 
   private async seedExclude(): Promise<void> {
@@ -675,7 +736,15 @@ export class ReviewEngine {
   private async buildChanges(
     fromRef: string = this.markerRef,
   ): Promise<ChangeEntry[]> {
-    const raw = await walkChanges(this.ctx, this.isIgnored, fromRef)
+    // When the incremental index is primed (a live adapter is feeding touch()),
+    // diff it against the base tree with no full-tree reads — only the changed
+    // files are read below (for line stats / rename detection). Otherwise fall
+    // back to the authoritative full disk walk, so a caller that never touches
+    // always sees current disk state.
+    const raw =
+      this.workIndex !== null
+        ? await this.rawChangesFromIndex(this.workIndex, fromRef)
+        : await walkChanges(this.ctx, this.isIgnored, fromRef)
     const adds = raw.filter((c) => c.headOid === null)
     const deletes = raw.filter((c) => c.workdirOid === null)
     const modifies = raw.filter(

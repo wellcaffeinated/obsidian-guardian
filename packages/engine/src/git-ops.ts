@@ -195,6 +195,62 @@ export async function walkChanges(
 }
 
 /**
+ * Hash every non-ignored work-tree file by **content**, returning a flat
+ * `path → blob oid` map of the current working tree. This is the expensive full
+ * scan (one read + hash per file); the engine primes its incremental index from
+ * it once, then maintains the index per-path on edits (see `touch`). Same
+ * content-based detection as {@link walkChanges} — no index stat-cache shortcut.
+ */
+export async function scanWorkdirHashes(
+  ctx: GitCtx,
+  isIgnored: (path: string) => boolean,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  await git.walk({
+    fs: ctx.fs,
+    dir: ctx.dir,
+    gitdir: ctx.gitdir,
+    trees: [WORKDIR()],
+    map: async (filepath, entries) => {
+      if (filepath === '.') return undefined
+      const workdir = entries[0]
+      if (!workdir) return undefined
+      if ((await workdir.type()) === 'tree') return undefined
+      if (isIgnored(filepath)) return undefined
+      const bytes = (await ctx.fs.promises.readFile(
+        join(ctx.dir, filepath),
+      )) as Uint8Array
+      out.set(filepath, await hashBytes(bytes))
+      return undefined
+    },
+  })
+  return out
+}
+
+/**
+ * Derive the raw change list (relative to a base tree) purely from two maps: the
+ * base tree's `path → FlatEntry` and the working tree's `path → blob oid` index.
+ * No file I/O — the inputs already carry content hashes. Emits one entry per path
+ * whose hashes differ (add: no base; delete: no workdir; modify: both differ).
+ */
+export function rawChangesBetween(
+  fromEntries: Map<string, FlatEntry>,
+  workIndex: Map<string, string>,
+): RawChange[] {
+  const out: RawChange[] = []
+  for (const [path, hash] of workIndex) {
+    const headOid = fromEntries.get(path)?.oid ?? null
+    if (headOid !== hash) out.push({ path, headOid, workdirOid: hash })
+  }
+  for (const [path, entry] of fromEntries) {
+    if (!workIndex.has(path)) {
+      out.push({ path, headOid: entry.oid, workdirOid: null })
+    }
+  }
+  return out
+}
+
+/**
  * Read a file's bytes + blob oid from a commit, or null if absent. `fromRef`
  * defaults to the baseline marker but may be any commit-ish (e.g. a checkpoint
  * oid) to read the path's content at an arbitrary snapshot.

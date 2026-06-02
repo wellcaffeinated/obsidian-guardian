@@ -175,11 +175,20 @@ packages/
         `format.ts` (DOM-free test seam; 3 new plugin tests).
   - [x] **Settings tab** (`settings.ts`): gitDir / reviewFolder / marker /
         ignore / author; `hide()` persists + rebuilds the engine.
-  - [ ] **Still TODO:** event-driven **incremental** hashing (today `refresh()`
-        re-hashes the whole tree on each debounce — full rescans are too slow on
-        mobile; the engine needs a stat-cache / path-scoped re-hash); a
-        confirm-modal gate on rollback/restore; richer peer/divergence UI;
-        broader live assertions (restore-checkpoint, multi-device ingest).
+  - [x] **Event-driven incremental hashing.** The engine keeps a `workIndex`
+        (`path → blob oid`); `touch(path)` re-hashes one path, `rescan()` does an
+        authoritative full reconcile. `buildChanges` uses the index when primed
+        (diffing it against any base tree — baseline OR a checkpoint — with no
+        full-tree reads; only changed files are read for stats), else falls back
+        to the full walk, so non-live callers (tests/CLI) stay disk-accurate.
+        `bless()` invalidates the index (re-primes from disk; the manifest is
+        always built from the authoritative full walk). The plugin queues edited
+        paths from `vault.on(...)` and `touch`es them in the debounced flush;
+        the explicit Refresh button calls `rescan()`. +5 engine tests.
+  - [ ] **Still TODO:** a confirm-modal gate on rollback/restore; richer
+        peer/divergence UI; broader live assertions (restore-checkpoint,
+        multi-device ingest); persist the workIndex across reloads (today it
+        cold-primes once per session on the first touch/rescan).
 - [ ] **Phase 4 — Mobile (Android).** IndexedDB `ObjectStore`; Buffer polyfill
   via tsdown inject; the spike (isomorphic-git + IndexedDB round-trip); drop
   `isDesktopOnly`; sideload + Syncthing round-trip across the user's devices.
@@ -190,20 +199,21 @@ packages/
 
 **State:** branch `plan/p2p-bless-protocol`, worktree `.worktrees/p2p-bless`
 (install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
-**Phase-2 coordination core ✅** + **Phase-3 plugin-integration first slice ✅**
-(real-data panel wired + live). All gates green: `pnpm -r test` = **81**
-(53 engine / 9 cli / 19 plugin), `pnpm -r typecheck`, `pnpm lint`, `pnpm knip`,
-engine + plugin `pnpm build`, and `pnpm test:plugin` (live headless smoke on the
-new design) all pass.
+**Phase-2 coordination core ✅** + **Phase-3 plugin integration ✅** (real-data
+panel + **event-driven incremental hashing**, wired + live). All gates green:
+`pnpm -r test` = **86** (58 engine / 9 cli / 19 plugin), `pnpm -r typecheck`,
+`pnpm lint`, `pnpm knip`, engine + plugin `pnpm build`, and `pnpm test:plugin`
+(live headless smoke on the new design) all pass.
 
 **Next step — choose:**
-1. _Recommended:_ **Phase 3 polish — incremental hashing.** Today the plugin's
-   `refresh()` calls `engine.timeline()`, which re-hashes the **whole** vault
-   (`walkChanges` content-hashes every non-ignored file) on every debounced
-   edit — fine on desktop, too slow on mobile/large vaults. Add a path-scoped /
-   stat-cached re-hash so a `vault.on(modify)` only re-hashes the touched path.
-   This is the gating work for Phase 4 (mobile). Also: a confirm-modal on
-   rollback/restore, and surface `checkpoint`/`restoreCheckpoint` more in the UI.
+1. _Recommended:_ **Phase 4 — Mobile (Android).** Incremental hashing (the
+   desktop-perf prerequisite) is done, so the engine is ready for the mobile
+   `ObjectStore`. Spike isomorphic-git over IndexedDB (Buffer polyfill via tsdown
+   inject), a composite routing `fs` (worktree→`app.vault.adapter`,
+   gitdir→IndexedDB), drop `isDesktopOnly`, then a real Syncthing round-trip
+   across the user's devices. See plan §Storage model + the Phase-1 "composite
+   routing fs" item (still open). Smaller follow-ups first if preferred: a
+   confirm-modal on rollback/restore, persisting the `workIndex` across reloads.
 2. Or **trim old machinery** now that the new path exists and is the product:
    `review-note.ts`, `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/
    `blessSnapshot`, the rotating-file bits of `replica-id.ts`, and `state.ts`'s

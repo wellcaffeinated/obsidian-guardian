@@ -56,6 +56,8 @@ export default class ObsidianGuardianPlugin
   private peers: PanelData['peers'] = null
   private refreshDebouncer: Debouncer | null = null
   private ingestDebouncer: Debouncer | null = null
+  /** Paths edited since the last flush, fed to engine.touch() before re-rendering. */
+  private readonly pendingTouches = new Set<string>()
 
   override async onload(): Promise<void> {
     await this.loadSettings()
@@ -105,7 +107,7 @@ export default class ObsidianGuardianPlugin
     })
 
     this.refreshDebouncer = createDebouncer(() => {
-      void this.refresh()
+      void this.flushEdits()
     }, REFRESH_DEBOUNCE_MS)
     this.ingestDebouncer = createDebouncer(() => {
       void this.runIngest()
@@ -169,19 +171,40 @@ export default class ObsidianGuardianPlugin
     this.registerEvent(this.app.vault.on('create', onChange))
     this.registerEvent(this.app.vault.on('delete', onChange))
     this.registerEvent(
-      this.app.vault.on('rename', (file) => this.onVaultChange(file.path)),
+      this.app.vault.on('rename', (file, oldPath) =>
+        this.onVaultChange(file.path, oldPath),
+      ),
     )
   }
 
-  private onVaultChange(path: string): void {
+  private onVaultChange(path: string, oldPath?: string): void {
     if (!this.active || !this.config) return
     const syncDir = `${this.config.reviewFolder}/sync`
     if (path === syncDir || path.startsWith(`${syncDir}/`)) {
       this.ingestDebouncer?.schedule()
       return
     }
-    if (shouldIgnorePath(path, this.config.reviewFolder)) return
-    this.refreshDebouncer?.schedule()
+    // Queue the touched path(s); the debounced flush re-hashes only these.
+    if (!shouldIgnorePath(path, this.config.reviewFolder)) {
+      this.pendingTouches.add(path)
+    }
+    if (oldPath && !shouldIgnorePath(oldPath, this.config.reviewFolder)) {
+      this.pendingTouches.add(oldPath)
+    }
+    if (this.pendingTouches.size > 0) this.refreshDebouncer?.schedule()
+  }
+
+  /** Apply queued per-path re-hashes, then recompute + re-render (the hot path). */
+  private async flushEdits(): Promise<void> {
+    if (!this.active || !this.engine) return
+    const paths = [...this.pendingTouches]
+    this.pendingTouches.clear()
+    try {
+      for (const path of paths) await this.engine.touch(path)
+      await this.reloadTimeline()
+    } catch (err) {
+      this.fail('refresh', err)
+    }
   }
 
   // --- ReviewController ------------------------------------------------------
@@ -216,6 +239,9 @@ export default class ObsidianGuardianPlugin
   async refresh(): Promise<void> {
     if (!this.active || !this.engine) return
     try {
+      // Explicit refresh = authoritative reconcile (catches any missed events).
+      this.pendingTouches.clear()
+      await this.engine.rescan()
       await this.reloadTimeline()
     } catch (err) {
       this.fail('refresh', err)
