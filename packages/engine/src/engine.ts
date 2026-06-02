@@ -14,18 +14,24 @@ import {
   commit,
   commitIndex,
   commitTree,
+  type FlatEntry,
   type GitCtx,
+  hashBlob,
   init,
   type RawChange,
   readCommitTime,
+  readFlatTree,
   readMarkerBlob,
   readTreeOid,
   remove,
   resolveRef,
   walkChanges,
+  writeBlob,
+  writeFlatTree,
   writeRef,
   writeTag,
 } from './git-ops'
+import { readLocalState, writeLocalState } from './local-state'
 import {
   changesFileName,
   changesFilePrefix,
@@ -39,12 +45,16 @@ import {
   readSeq,
   writeBlessHighWater,
 } from './state'
-import type {
-  Author,
-  ChangeEntry,
-  EngineConfig,
-  SnapshotStatus,
-  Status,
+import {
+  type ApplyResult,
+  type Author,
+  type BlessRecord,
+  type ChangeEntry,
+  DELETED,
+  type EngineConfig,
+  type Manifest,
+  type SnapshotStatus,
+  type Status,
 } from './types'
 
 const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
@@ -220,9 +230,96 @@ export class ReviewEngine {
     return status
   }
 
-  /** Advance the baseline marker to the current state. */
-  async bless(): Promise<void> {
-    await this.commitAll('chore: bless baseline')
+  /**
+   * Approve the current working tree: build a **delta manifest** (the paths
+   * changed since baseline, as absolute content hashes plus {@link DELETED}
+   * tombstones), advance our own baseline through {@link applyBless}, and record
+   * the bless in local state. Returns the {@link BlessRecord} so the adapter can
+   * publish it to the synced signal folder (see the coordination layer).
+   *
+   * Crash-safe ordering: the baseline ref move (atomic) happens before we persist
+   * `blessSeq`; a crash between the two is recoverable by re-deriving the record
+   * from `baseline`'s parent→baseline diff on the next ingest.
+   */
+  async bless(): Promise<BlessRecord> {
+    const self = await this.ensureReplicaId()
+    const changes = await walkChanges(this.ctx, this.isIgnored)
+    const manifest: Manifest = changes.map((c) => ({
+      path: c.path,
+      hash: c.workdirOid === null ? DELETED : c.workdirOid,
+    }))
+    const state = await readLocalState(this.fs, this.gitDir, self)
+    const rec: BlessRecord = {
+      client: self,
+      seq: state.blessSeq + 1,
+      manifest,
+      blessedAt: new Date().toISOString(),
+    }
+    await this.applyBless(rec)
+    state.blessSeq = rec.seq
+    state.observedSeq[self] = rec.seq
+    await writeLocalState(this.fs, this.gitDir, state)
+    return rec
+  }
+
+  /**
+   * The core convergence rule: apply a bless record **per file, content-gated**.
+   * For each manifest entry, advance the baseline for that path **only if** this
+   * device's own (synced) working tree already hashes to the blessed value (or,
+   * for {@link DELETED}, the path is already absent). That single content gate is
+   * simultaneously the arrival gate (bytes not synced yet), the causal cut (a
+   * newer local edit won't match an older blessed hash), and the conflict
+   * resolver (only the bless matching current content admits) — so the fold is
+   * idempotent, commutative, and convergent with no vector clock.
+   *
+   * Builds a new baseline tree (old baseline overlaid with the admitted paths'
+   * blobs) and moves the `baseline` ref in one atomic commit. The working tree is
+   * never touched. Returns whether the baseline advanced and whether any entries
+   * are still gated (to retry on a later ingest).
+   */
+  async applyBless(rec: BlessRecord): Promise<ApplyResult> {
+    const baselineCommit = await resolveRef(this.ctx)
+    const entries: Map<string, FlatEntry> = baselineCommit
+      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, baselineCommit))
+      : new Map()
+
+    let changed = false
+    let stillPending = false
+    for (const entry of rec.manifest) {
+      if (entry.hash === DELETED) {
+        // Content gate (delete): the bytes must already be gone locally.
+        if ((await this.readWorkdir(entry.path)) !== null) {
+          stillPending = true
+          continue
+        }
+        if (entries.delete(entry.path)) changed = true
+      } else {
+        const bytes = await this.readWorkdir(entry.path)
+        // Content gate (set): local bytes must hash to the blessed value.
+        if (!bytes || (await hashBlob(bytes)) !== entry.hash) {
+          stillPending = true
+          continue
+        }
+        const oid = await writeBlob(this.ctx, bytes)
+        const prev = entries.get(entry.path)
+        if (!prev || prev.oid !== oid) {
+          entries.set(entry.path, { oid, mode: prev?.mode ?? '100644' })
+          changed = true
+        }
+      }
+    }
+
+    if (changed) {
+      const newTree = await writeFlatTree(this.ctx, entries)
+      await commitTree(
+        this.ctx,
+        this.author,
+        `bless: apply ${rec.client.slice(0, 8)}:${rec.seq}`,
+        newTree,
+        baselineCommit ? [baselineCommit] : [],
+      )
+    }
+    return { changed, stillPending }
   }
 
   /**

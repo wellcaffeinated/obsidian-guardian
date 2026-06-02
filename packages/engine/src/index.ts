@@ -11,11 +11,22 @@ export {
   reviewNoteName,
 } from './replica-id'
 export { renderReviewNote } from './review-note'
-export type {
-  Author,
-  ChangeEntry,
-  ChangeKind,
-  EngineConfig,
-  SnapshotStatus,
-  Status,
+export {
+  type ApplyResult,
+  type Author,
+  type BlessRecord,
+  type ChangeEntry,
+  type ChangeKind,
+  type ClientId,
+  DELETED,
+  type DeviceState,
+  type EngineConfig,
+  type Hash,
+  type LocalState,
+  type Manifest,
+  type ManifestEntry,
+  type Path,
+  type Seq,
+  type SnapshotStatus,
+  type Status,
 } from './types'

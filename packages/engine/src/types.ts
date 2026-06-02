@@ -67,6 +67,103 @@ export interface Author {
   email: string
 }
 
+// ---------------------------------------------------------------------------
+// P2P bless coordination (see plans/p2p-bless-protocol.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable per-device id. A random id persisted in the device-local (non-synced)
+ * gitDir — NEVER a synced setting, since a shared id would collide every device
+ * onto one signal file. One {@link DeviceState} + one {@link BlessRecord} file
+ * is written per ClientId (single-writer ⇒ no sync-conflict copies).
+ */
+export type ClientId = string
+
+/**
+ * Content address of a file's bytes: the git blob sha. The cross-device
+ * coordination currency — identical everywhere for identical bytes,
+ * path- and history-independent. Each device's object store is private, so only
+ * the *hash* must agree, not the storage layout.
+ */
+export type Hash = string
+
+/** Monotonic per-client counter. Used only for dedup, freshness, and GC. */
+export type Seq = number
+
+/** Vault-relative posix path. */
+export type Path = string
+
+/**
+ * Explicit deletion sentinel — NOT null. Omission from a manifest means
+ * "unchanged from baseline", so a delete must be stated. A hex hash can never
+ * collide with this literal.
+ */
+export const DELETED = 'DELETED' as const
+
+/** One path's blessed content address (or a tombstone). */
+export interface ManifestEntry {
+  path: Path
+  /** Absolute content hash, or {@link DELETED} when the path was removed. */
+  hash: Hash | typeof DELETED
+}
+
+/**
+ * Delta only: the paths the blesser perceived as changed from ITS baseline.
+ * Inclusion is baseline-relative; the hash value is absolute. That split lets a
+ * receiver with a *different* baseline still apply it per-path.
+ */
+export type Manifest = ManifestEntry[]
+
+/**
+ * A device's published presence/housekeeping state (synced JSON). Never carries
+ * correctness — the content gate in `applyBless` does that. `observedSeq` drives
+ * dedup + GC only.
+ */
+export interface DeviceState {
+  client: ClientId
+  /** This device's latest checkpoint seq. */
+  head: Seq
+  /** Optional digest of its baseline tree, for UI/divergence display. */
+  baselineDigest?: Hash
+  /** Latest bless `seq` this device has ingested from each peer (incl. self). */
+  observedSeq: Record<ClientId, Seq>
+  /** ISO-8601; staleness/UI only, NOT correctness. */
+  updatedAt: string
+}
+
+/** The approval record a device publishes (synced JSON, overwritten in place). */
+export interface BlessRecord {
+  client: ClientId
+  /** This client's bless sequence (monotonic). */
+  seq: Seq
+  /** Delta from the blesser's baseline → the blessed checkpoint (absolute hashes). */
+  manifest: Manifest
+  /** ISO-8601; display + freshness/GC only. */
+  blessedAt: string
+}
+
+/**
+ * Per-device coordination state persisted in the non-synced gitDir, so a crash
+ * never loses an in-flight bless obligation. `self`/`head` mirror the persisted
+ * ClientId / checkpoint seq; `pending` holds received blesses whose bytes have
+ * not yet synced in (retried each ingest, pruned by the freshness window).
+ */
+export interface LocalState {
+  self: ClientId
+  observedSeq: Record<ClientId, Seq>
+  /** This device's own latest bless seq. */
+  blessSeq: Seq
+  pending: BlessRecord[]
+}
+
+/** Outcome of applying a single bless record (per-file content gate). */
+export interface ApplyResult {
+  /** Baseline ref advanced (at least one path passed the gate and changed). */
+  changed: boolean
+  /** Some manifest entries did not match the working tree yet (retry/prune). */
+  stillPending: boolean
+}
+
 /**
  * Configuration for a single-vault {@link ReviewEngine}.
  */
