@@ -9,7 +9,7 @@ import {
   DEFAULT_REVIEW_FOLDER,
   FRESHNESS_WINDOW_MS,
 } from './defaults'
-import { decode, isBinary, lineStats } from './diff-stats'
+import { decode, isBinary, lineDiff, lineStats } from './diff-stats'
 import {
   add,
   commit,
@@ -64,6 +64,7 @@ import {
   DELETED,
   type DeviceState,
   type EngineConfig,
+  type FileDiff,
   type LocalState,
   type Manifest,
   type SnapshotStatus,
@@ -586,6 +587,24 @@ export class ReviewEngine {
       current,
       checkpoints,
     }
+  }
+
+  /**
+   * Compute the expandable line diff for one path, from a base ref (default: the
+   * baseline marker; pass a checkpoint oid for a checkpoint row) to the current
+   * working tree. Reads only this one file pair (cheap; called lazily on expand).
+   * Binary files return `{ binary: true, lines: [] }`.
+   */
+  async fileDiff(
+    path: string,
+    fromRef: string = this.markerRef,
+  ): Promise<FileDiff> {
+    const before = await readMarkerBlob(this.ctx, path, fromRef)
+    const after = await this.readWorkdir(path)
+    const b = before?.blob ?? new Uint8Array()
+    const a = after ?? new Uint8Array()
+    if (isBinary(b) || isBinary(a)) return { binary: true, lines: [] }
+    return { binary: false, lines: lineDiff(decode(b), decode(a)) }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */

@@ -66,6 +66,12 @@ export interface FileRow {
   markdown: boolean
   /** Pre-formatted stat string (`+3 -1` or `binary`). */
   stats: string
+  /** Lines added (0 for binary). */
+  added: number
+  /** Lines removed (0 for binary). */
+  removed: number
+  /** True when the file can't be line-diffed (no expand affordance). */
+  binary: boolean
   /** For renames, the previous path. */
   from?: string
 }
@@ -114,6 +120,9 @@ export function toFileRow(change: ChangeEntry): FileRow {
     name,
     markdown: isMarkdown(change.path),
     stats: formatStats(change),
+    added: change.added,
+    removed: change.removed,
+    binary: change.binary,
     from: change.renamedFrom,
   }
 }

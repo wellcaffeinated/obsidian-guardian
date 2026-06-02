@@ -1,4 +1,5 @@
 import type { PromiseFsClient } from 'isomorphic-git'
+import type { DiffLine } from './diff-stats'
 
 /**
  * The kind of change a file underwent relative to the baseline marker.
@@ -70,6 +71,18 @@ export interface Checkpoint {
   seq: number
   /** ISO-8601 commit time of the checkpoint. */
   when: string
+}
+
+/**
+ * An expandable per-file diff: the signed line list, or a binary marker when the
+ * file can't be shown line-by-line. Computed on demand (e.g. when a file row in
+ * the panel is expanded), not as part of the timeline.
+ */
+export interface FileDiff {
+  /** True when the file is binary (no line diff is shown). */
+  binary: boolean
+  /** Signed diff lines (empty when binary or when there is no textual change). */
+  lines: DiffLine[]
 }
 
 /** A checkpoint plus the net changes from it to the current working tree. */

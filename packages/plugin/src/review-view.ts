@@ -1,3 +1,4 @@
+import type { FileDiff } from '@obsidian-guardian/engine'
 import {
   type App,
   ItemView,
@@ -32,6 +33,8 @@ export interface ReviewController {
   revert(path: string): Promise<void>
   /** Restore the whole working tree to a checkpoint commit. */
   restoreCheckpoint(oid: string): Promise<void>
+  /** Compute one file's line diff (base = baseline, or a checkpoint oid). */
+  fileDiff(path: string, fromRef?: string): Promise<FileDiff>
   /** Open a vault file in a new pane. */
   openFile(path: string): void
 }
@@ -61,6 +64,12 @@ export class ReviewView extends ItemView {
   private readonly controller: ReviewController
   /** Expanded checkpoint oids (collapsed by default). */
   private readonly open = new Set<string>()
+  /** Expanded file rows, keyed `${fromRefKey}:${path}`. */
+  private readonly openFiles = new Set<string>()
+  /** Lazily fetched per-file diffs, keyed like {@link openFiles}. Cleared on reload. */
+  private readonly diffs = new Map<string, FileDiff>()
+  /** Keys with an in-flight fileDiff fetch (so we don't double-request). */
+  private readonly fetching = new Set<string>()
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
     super(leaf)
@@ -85,6 +94,9 @@ export class ReviewView extends ItemView {
 
   /** Re-render from the host's current data. Called by the plugin after actions. */
   update(): void {
+    // Cached diffs are stale once the tree moves; re-fetch on demand for any
+    // rows still expanded. Expansion state itself persists across reloads.
+    this.diffs.clear()
     this.render()
   }
 
@@ -181,7 +193,9 @@ export class ReviewView extends ItemView {
       'baseline..current',
       `${data.current.length} file${data.current.length === 1 ? '' : 's'} changed`,
     )
-    for (const change of data.current) this.renderFileRow(body, change, true)
+    for (const change of data.current) {
+      this.renderFileRow(body, change, 'current', undefined, true)
+    }
 
     const actions = body.createDiv({ cls: 'og-entry__actions' })
     this.button(
@@ -247,7 +261,9 @@ export class ReviewView extends ItemView {
       `${cp.shortHash}..current`,
       'Restore reverts these files',
     )
-    for (const change of cp.changes) this.renderFileRow(body, change, false)
+    for (const change of cp.changes) {
+      this.renderFileRow(body, change, cp.oid, cp.oid, false)
+    }
     const actions = body.createDiv({ cls: 'og-entry__actions' })
     this.button(
       actions,
@@ -307,11 +323,27 @@ export class ReviewView extends ItemView {
   private renderFileRow(
     parent: HTMLElement,
     change: FileRow,
+    fromRefKey: string,
+    fromRef: string | undefined,
     revertable: boolean,
   ): void {
+    const key = `${fromRefKey}:${change.path}`
+    const expandable = !change.binary
+    const isOpen = expandable && this.openFiles.has(key)
+
     const wrap = parent.createDiv({ cls: 'og-file' })
     const row = wrap.createDiv({ cls: 'og-file__row' })
-    row.createSpan({ cls: 'og-file__caret og-file__caret--none' })
+    if (expandable) {
+      setIcon(
+        row.createSpan({ cls: 'og-file__caret' }),
+        isOpen ? 'chevron-down' : 'chevron-right',
+      )
+      row.addClass('og-file__row--expandable')
+      row.addEventListener('click', () => this.toggleFile(key))
+    } else {
+      row.createSpan({ cls: 'og-file__caret og-file__caret--none' })
+    }
+
     row.createSpan({
       cls: `og-badge og-badge--${change.kind}`,
       text: KIND_ABBR[change.kind],
@@ -319,15 +351,26 @@ export class ReviewView extends ItemView {
 
     const path = row.createSpan({ cls: 'og-file__path' })
     if (change.dir) path.createSpan({ cls: 'og-file__dir', text: change.dir })
-    path.createSpan({ cls: 'og-file__name', text: change.name })
+    const name = path.createSpan({ cls: 'og-file__name', text: change.name })
     if (change.markdown) {
-      path.addClass('og-file__path--link')
-      path.addEventListener('click', () =>
-        this.controller.openFile(change.path),
-      )
+      name.addClass('og-file__name--link')
+      name.addEventListener('click', (e) => {
+        e.stopPropagation() // don't also toggle the diff
+        this.controller.openFile(change.path)
+      })
     }
 
-    const stats = row.createSpan({ cls: 'og-file__stats', text: change.stats })
+    const stats = row.createSpan({ cls: 'og-file__stats' })
+    if (change.binary) {
+      stats.createSpan({ text: 'binary' })
+    } else {
+      if (change.added > 0) {
+        stats.createSpan({ cls: 'og-stat-add', text: `+${change.added}` })
+      }
+      if (change.removed > 0) {
+        stats.createSpan({ cls: 'og-stat-del', text: `−${change.removed}` })
+      }
+    }
 
     if (revertable) {
       const revert = row.createSpan({
@@ -335,11 +378,64 @@ export class ReviewView extends ItemView {
         attr: { 'aria-label': 'Revert this file to baseline' },
       })
       setIcon(revert, 'undo-2')
-      revert.addEventListener('click', () => {
+      revert.addEventListener('click', (e) => {
+        e.stopPropagation()
         void this.controller.revert(change.path)
       })
     }
-    void stats
+
+    if (isOpen) this.renderDiff(wrap, key, change.path, fromRef)
+  }
+
+  /** Render the expanded inline diff for a file row (lazy-fetched + cached). */
+  private renderDiff(
+    wrap: HTMLElement,
+    key: string,
+    path: string,
+    fromRef: string | undefined,
+  ): void {
+    const box = wrap.createDiv({ cls: 'og-diff' })
+    const ctx = (text: string): void => {
+      box.createDiv({ cls: 'og-diff__line og-diff__line--ctx', text })
+    }
+    const diff = this.diffs.get(key)
+    if (!diff) {
+      ctx('Loading diff…')
+      this.fetchDiff(key, path, fromRef)
+      return
+    }
+    if (diff.binary) return ctx('Binary file — no line diff.')
+    if (diff.lines.length === 0) return ctx('No textual changes.')
+    for (const line of diff.lines) {
+      const kind = line.sign === '+' ? 'add' : line.sign === '-' ? 'del' : 'ctx'
+      box.createDiv({
+        cls: `og-diff__line og-diff__line--${kind}`,
+        text: `${line.sign} ${line.text}`,
+      })
+    }
+  }
+
+  private toggleFile(key: string): void {
+    if (this.openFiles.has(key)) this.openFiles.delete(key)
+    else this.openFiles.add(key)
+    this.render()
+  }
+
+  /** Fetch one file's diff (once), cache it, and re-render if still expanded. */
+  private fetchDiff(
+    key: string,
+    path: string,
+    fromRef: string | undefined,
+  ): void {
+    if (this.fetching.has(key) || this.diffs.has(key)) return
+    this.fetching.add(key)
+    void this.controller
+      .fileDiff(path, fromRef)
+      .then((diff) => {
+        this.diffs.set(key, diff)
+        if (this.openFiles.has(key)) this.render()
+      })
+      .finally(() => this.fetching.delete(key))
   }
 
   private renderFooter(root: HTMLElement): void {

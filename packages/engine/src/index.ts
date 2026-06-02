@@ -3,6 +3,7 @@ export {
   parseChangesSignal,
   renderChangesFile,
 } from './changes-file'
+export type { DiffLine } from './diff-stats'
 export { ReviewEngine } from './engine'
 export {
   changesFileName,
@@ -30,6 +31,7 @@ export {
   DELETED,
   type DeviceState,
   type EngineConfig,
+  type FileDiff,
   type Hash,
   type LocalState,
   type Manifest,

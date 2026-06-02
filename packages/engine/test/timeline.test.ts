@@ -158,6 +158,46 @@ describe('incremental work-index (touch / rescan)', () => {
   })
 })
 
+describe('fileDiff', () => {
+  it('returns signed lines for a modified file (baseline → workdir)', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\ntwo\n' })
+    await write(vault, 'a.md', 'one\nTWO\nthree\n')
+    const diff = await engine.fileDiff('a.md')
+    expect(diff.binary).toBe(false)
+    expect(diff.lines).toEqual([
+      { sign: ' ', text: 'one' },
+      { sign: '-', text: 'two' },
+      { sign: '+', text: 'TWO' },
+      { sign: '+', text: 'three' },
+    ])
+  })
+
+  it('diffs against a checkpoint when given its oid', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'one\ntwo\n')
+    const cp = await engine.checkpoint()
+    await write(vault, 'a.md', 'one\ntwo\nthree\n')
+    const diff = await engine.fileDiff('a.md', cp.oid)
+    expect(diff.lines).toEqual([
+      { sign: ' ', text: 'one' },
+      { sign: ' ', text: 'two' },
+      { sign: '+', text: 'three' },
+    ])
+  })
+
+  it('reports an added file as all-additions and an unchanged file as all-context', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'keep\n' })
+    await write(vault, 'b.md', 'x\ny\n')
+    const add = await engine.fileDiff('b.md')
+    expect(add.lines).toEqual([
+      { sign: '+', text: 'x' },
+      { sign: '+', text: 'y' },
+    ])
+    const same = await engine.fileDiff('a.md')
+    expect(same.lines).toEqual([{ sign: ' ', text: 'keep' }])
+  })
+})
+
 describe('restoreCheckpoint', () => {
   it('resets the working tree to a checkpoint without moving the baseline', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })

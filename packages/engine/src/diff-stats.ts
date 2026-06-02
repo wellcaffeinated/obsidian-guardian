@@ -1,5 +1,13 @@
 import { diffLines } from 'diff'
 
+/** One line of a rendered diff: a context, added, or removed line of text. */
+export interface DiffLine {
+  /** `' '` context, `'+'` added, `'-'` removed. */
+  sign: ' ' | '+' | '-'
+  /** The line text (no trailing newline). */
+  text: string
+}
+
 /**
  * Heuristic binary check: a NUL byte in the first 8 KiB means "don't diff".
  */
@@ -30,4 +38,22 @@ export function lineStats(
     else if (part.removed) removed += part.count ?? 0
   }
   return { added, removed }
+}
+
+/**
+ * Render a line-based diff between two text blobs as a flat list of signed lines
+ * (context + added + removed), in file order. The inverse detail of
+ * {@link lineStats}; used to show an expandable inline diff per file.
+ */
+export function lineDiff(before: string, after: string): DiffLine[] {
+  const out: DiffLine[] = []
+  for (const part of diffLines(before, after)) {
+    const sign: DiffLine['sign'] = part.added ? '+' : part.removed ? '-' : ' '
+    const lines = part.value.split('\n')
+    // diffLines parts end with a trailing newline ⇒ a trailing empty segment;
+    // drop it so we don't emit a phantom blank line per hunk.
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    for (const text of lines) out.push({ sign, text })
+  }
+  return out
 }

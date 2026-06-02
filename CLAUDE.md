@@ -190,14 +190,22 @@ packages/
         restore-checkpoint — now require a Cancel/Confirm dialog before
         discarding unblessed work. Per-file revert stays ungated (small, single
         file; native file history covers it). Verified live in the container.
+  - [x] **Inline per-file diffs + colored stats** (matches `gui-stub-v4.png`).
+        Engine `fileDiff(path, fromRef?)` (+ `lineDiff` in `diff-stats.ts`,
+        `DiffLine`/`FileDiff` types) computes a signed line list base→workdir,
+        lazily — only for the file pair, on expand. The panel renders `+N` green
+        / `−N` red stats and expandable file rows: clicking a row fetches its
+        diff (cached; cache cleared on reload, expansion persists) and renders
+        the colored hunk. The filename stays a click-to-open link. +3 engine
+        tests; verified live. (Was a parked "future feature" — now shipped.)
   - [ ] **Deferred polish (Phase 5):** richer peer/divergence UI; broader live
         assertions (restore-checkpoint, multi-device ingest); persist the
         workIndex across reloads (today it cold-primes once per session on the
-        first touch/rescan).
+        first touch/rescan); diff context capping for very large files.
 - [ ] **Phase 4 — Mobile (Android).** IndexedDB `ObjectStore`; Buffer polyfill
   via tsdown inject; the spike (isomorphic-git + IndexedDB round-trip); drop
   `isDesktopOnly`; sideload + Syncthing round-trip across the user's devices.
-- [ ] **Phase 5 — Polish.** Inline diffs, peer/sync UX, packaging (later;
+- [ ] **Phase 5 — Polish.** Peer/sync UX, packaging (later;
   community store is low priority).
 
 ### Resume here (session handoff)
@@ -206,7 +214,7 @@ packages/
 (install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
 **Phase-2 coordination core ✅** + **Phase-3 plugin integration ✅** (real-data
 panel + **event-driven incremental hashing**, wired + live). All gates green:
-`pnpm -r test` = **86** (58 engine / 9 cli / 19 plugin), `pnpm -r typecheck`,
+`pnpm -r test` = **89** (61 engine / 9 cli / 19 plugin), `pnpm -r typecheck`,
 `pnpm lint`, `pnpm knip`, engine + plugin `pnpm build`, and `pnpm test:plugin`
 (live headless smoke on the new design) all pass.
 

@@ -1,5 +1,6 @@
 import * as nodeFs from 'node:fs'
 import {
+  type FileDiff,
   ReviewEngine,
   readDeviceStates,
   syncDirPath,
@@ -280,6 +281,11 @@ export default class ObsidianGuardianPlugin
       await engine.restoreCheckpoint(oid)
       new Notice('Working tree restored to checkpoint.')
     })
+  }
+
+  async fileDiff(path: string, fromRef?: string): Promise<FileDiff> {
+    if (!this.engine) return { binary: false, lines: [] }
+    return this.engine.fileDiff(path, fromRef)
   }
 
   openFile(path: string): void {

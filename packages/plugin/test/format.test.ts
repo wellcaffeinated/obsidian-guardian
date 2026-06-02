@@ -87,6 +87,9 @@ describe('toFileRow', () => {
       name: 'b.md',
       markdown: true,
       stats: '+5 -3',
+      added: 5,
+      removed: 3,
+      binary: false,
     })
     const nested: ChangeEntry = {
       path: 'Projects/Roastery.md',
