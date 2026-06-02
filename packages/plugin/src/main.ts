@@ -1,5 +1,6 @@
 import * as nodeFs from 'node:fs'
 import {
+  createRoutingFs,
   type FileDiff,
   ReviewEngine,
   readDeviceStates,
@@ -164,7 +165,16 @@ export default class ObsidianGuardianPlugin
         vaultName: this.app.vault.getName(),
         settings: this.settings,
       })
-      this.engine = new ReviewEngine({ ...this.config, fs: nodeFs })
+      // Route the working tree and the device-local object store through one
+      // composite fs. On desktop both backends are node:fs (a behaviour-neutral
+      // seam); on mobile this is where the worktree (app.vault.adapter) and the
+      // gitdir (IndexedDB) backends diverge without touching the engine.
+      const fs = createRoutingFs({
+        gitDir: this.config.gitDir,
+        gitDirFs: nodeFs,
+        workTreeFs: nodeFs,
+      })
+      this.engine = new ReviewEngine({ ...this.config, fs })
       return true
     } catch (err) {
       this.fail('configure', err)
