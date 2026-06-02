@@ -86,6 +86,22 @@ packages/
   (`tsdown`, `vitest`, `knip`, …) — use them.
 - **Named exports only**; re-export from each package's `src/index.ts`.
 - **Conventional Commits** (feat/fix/chore/…).
+- **Never shadow a base-class member when extending an `obsidian` class.** When
+  you `extends ItemView` / `View` / `Plugin` / `Modal` / `Component` / etc., your
+  instance **fields and methods share one namespace with the base class's own
+  fields/methods** — and Obsidian's runtime classes have many *undocumented*
+  members not in `obsidian.d.ts`. A collision is silent and brutal: e.g. a
+  `ReviewView` field named `open` made Obsidian construct the view but **never
+  call `onOpen()`** (blank panel, no error). Defend against it:
+  - Give view/plugin state **specific, namespaced field names** (`openCheckpoints`,
+    not `open`; `diffCache`, not `cache`). Avoid bare generic names — `open`,
+    `view`, `app`, `leaf`, `icon`, `scope`, `navigation`, `containerEl`,
+    `contentEl`, `state`, `load`, `update`, `setState`/`getState`,
+    `register*`, `on*` — on any subclass of an `obsidian` class.
+  - Only **intentionally** override base methods (`onOpen`, `onClose`, `onload`,
+    `onunload`, `getViewType`, `getDisplayText`, `getIcon`, `setState`); mark them
+    `override` so the compiler tells you when a name unexpectedly *does* match the
+    base (and conversely flags a typo'd override that silently doesn't).
 
 ## Testing the plugin (hard-won gotchas — still apply)
 
@@ -337,3 +353,51 @@ the overlay workaround (`pnpm shot:stub`; see memory
   **configurable frequency**; the manual `Checkpoint` button is always
   available. Auto-checkpoint creates snapshots only — it never advances the
   `baseline` (no auto-bless). Retention prunes old auto-checkpoints.
+
+## Troubleshooting an Obsidian plugin (general tips)
+
+Generic debugging playbook for Obsidian plugins (not specific to this one) —
+drive everything through the **headless container**, never a real vault.
+
+**First principles**
+- **Reproduce in the container and trust it.** It is real Obsidian and behaves
+  like the desktop app (it *can* mount main-area views, run plugins, etc.). If a
+  "rig limitation" seems to explain a bug, be suspicious — it's usually your code.
+- **Verify the build you're testing is the build you shipped.** 
+  `sha256sum dist/main.js <vault>/.../main.js` must match.** Reload the plugin
+  fresh from disk between iterations (`obs plugin:reload <id>`, or
+  `disablePlugin`+`enablePlugin`; a full container restart is the most reliable).
+
+**Inspecting live state via `obsidian eval`**
+- `await`-ing `setViewState`/`revealLeaf` **inside** an `obs eval` can hang the
+  eval (no output). Pattern that works: **fire the action without awaiting it**
+  in the returned expression, `sleep`, then inspect in a **separate** `obs eval`.
+- For multi-step async, wrap each step in `Promise.race([p, timeout])` so one
+  hung call doesn't swallow the whole result.
+- Capture logs/errors: `obs dev:debug on` then `obs dev:console [level=error]`;
+  `obs dev:errors` is a separate buffer. Or instrument your code to push to a
+  `window.__log` array and read it back with a later eval.
+- Detaching leaves in eval can persist a broken `.obsidian/workspace.json` that
+  survives restarts — `rm` it before booting for a clean slate.
+
+**View won't render / panel is blank**
+- Check whether the view actually **mounted**: `leaf.view._loaded === true` and
+  the leaf's `containerEl` has a `workspace-leaf-content` child. If `_loaded` is
+  false, Obsidian never called `load()`/`onOpen()` — the problem is *before* your
+  render code, so adding logs inside `onOpen`/`render` won't help.
+- If a view is constructed (`ctor` runs) but never loads, **suspect a member-name
+  collision with the base class** (see Conventions) before blaming async/timing,
+  deferred views, or the rig.
+
+**Investigating mysterious behaviour (eg: blank panels, panels not loading)**
+- Build a **minimal working `ItemView`** in the same plugin and confirm it mounts.
+  Then **morph it toward the broken class one change at a time** — each step
+  logged, behind try/catch, checking the error console — until it breaks. The
+  change that flips it is the cause. (Conversely: strip the broken class down
+  until it works.) Register several variants at once and probe them in a single
+  run to save restart cycles.
+- Hold **one variable at a time**: same registration, same open path, same vault
+  state. Re-confirm your known-good control *each build* — don't assume it still
+  works after an unrelated change.
+- Consider **import/require side effects** as you add functionality: a newly
+  imported module may run code at load time.

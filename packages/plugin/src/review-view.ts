@@ -62,8 +62,15 @@ function formatWhen(iso: string | null): string {
 /** The vault-wide review panel, rendered from the host {@link ReviewController}. */
 export class ReviewView extends ItemView {
   private readonly controller: ReviewController
-  /** Expanded checkpoint oids (collapsed by default). */
-  private readonly open = new Set<string>()
+  /**
+   * Expanded checkpoint oids (collapsed by default).
+   *
+   * NB: must NOT be named `open` — a field called `open` on an `ItemView`
+   * subclass collides with Obsidian's view machinery and silently prevents the
+   * view from loading (`onOpen` never fires; the tab renders blank). This cost a
+   * long debugging session; keep this name distinct from `open`.
+   */
+  private readonly openCheckpoints = new Set<string>()
   /** Expanded file rows, keyed `${fromRefKey}:${path}`. */
   private readonly openFiles = new Set<string>()
   /** Lazily fetched per-file diffs, keyed like {@link openFiles}. Cleared on reload. */
@@ -236,7 +243,7 @@ export class ReviewView extends ItemView {
   // --- checkpoint: frozen snapshot, collapsible -----------------------------
 
   private renderCheckpoint(parent: HTMLElement, cp: CheckpointRow): void {
-    const isOpen = this.open.has(cp.oid)
+    const isOpen = this.openCheckpoints.has(cp.oid)
     const card = parent.createDiv({ cls: 'og-entry og-entry--history' })
     const head = card.createDiv({ cls: 'og-entry__head' })
     setIcon(
@@ -452,8 +459,8 @@ export class ReviewView extends ItemView {
   }
 
   private toggle(key: string): void {
-    if (this.open.has(key)) this.open.delete(key)
-    else this.open.add(key)
+    if (this.openCheckpoints.has(key)) this.openCheckpoints.delete(key)
+    else this.openCheckpoints.add(key)
     this.render()
   }
 
