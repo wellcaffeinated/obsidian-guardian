@@ -1,4 +1,10 @@
-import { ItemView, setIcon, type WorkspaceLeaf } from 'obsidian'
+import {
+  type App,
+  ItemView,
+  Modal,
+  setIcon,
+  type WorkspaceLeaf,
+} from 'obsidian'
 import type { CheckpointRow, FileRow, PanelData } from './format'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
@@ -192,10 +198,25 @@ export class ReviewView extends ItemView {
       'undo-2',
       'Undo these changes',
       () => {
-        void this.controller.rollback()
+        this.confirm({
+          title: 'Discard all pending changes?',
+          body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
+          confirmText: 'Discard changes',
+          onConfirm: () => void this.controller.rollback(),
+        })
       },
       'warn',
     )
+  }
+
+  /** Open a confirm dialog; runs `onConfirm` only if the user proceeds. */
+  private confirm(opts: {
+    title: string
+    body: string
+    confirmText: string
+    onConfirm: () => void
+  }): void {
+    new ConfirmModal(this.app, opts).open()
   }
 
   // --- checkpoint: frozen snapshot, collapsible -----------------------------
@@ -233,7 +254,12 @@ export class ReviewView extends ItemView {
       'rotate-ccw',
       'Restore this checkpoint',
       () => {
-        void this.controller.restoreCheckpoint(cp.oid)
+        this.confirm({
+          title: 'Restore this checkpoint?',
+          body: `The working tree is overwritten with checkpoint ${cp.shortHash}. Changes made since it are lost (the baseline is unchanged).`,
+          confirmText: 'Restore',
+          onConfirm: () => void this.controller.restoreCheckpoint(cp.oid),
+        })
       },
       'warn',
     )
@@ -342,5 +368,50 @@ export class ReviewView extends ItemView {
     setIcon(btn.createSpan({ cls: 'og-btn__icon' }), icon)
     btn.createSpan({ text: label })
     if (onClick) btn.addEventListener('click', onClick)
+  }
+}
+
+/** A small Cancel/Confirm dialog gating a destructive action (rollback/restore). */
+class ConfirmModal extends Modal {
+  private readonly opts: {
+    title: string
+    body: string
+    confirmText: string
+    onConfirm: () => void
+  }
+
+  constructor(
+    app: App,
+    opts: {
+      title: string
+      body: string
+      confirmText: string
+      onConfirm: () => void
+    },
+  ) {
+    super(app)
+    this.opts = opts
+  }
+
+  override onOpen(): void {
+    const { contentEl } = this
+    contentEl.addClass('og-confirm')
+    contentEl.createEl('h3', { text: this.opts.title })
+    contentEl.createEl('p', { text: this.opts.body })
+    const actions = contentEl.createDiv({ cls: 'og-confirm__actions' })
+    const cancel = actions.createEl('button', { text: 'Cancel' })
+    cancel.addEventListener('click', () => this.close())
+    const confirm = actions.createEl('button', {
+      cls: 'mod-warning',
+      text: this.opts.confirmText,
+    })
+    confirm.addEventListener('click', () => {
+      this.close()
+      this.opts.onConfirm()
+    })
+  }
+
+  override onClose(): void {
+    this.contentEl.empty()
   }
 }

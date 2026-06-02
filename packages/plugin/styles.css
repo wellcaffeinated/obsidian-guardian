@@ -278,6 +278,10 @@
   color: var(--color-red);
   background: color-mix(in srgb, var(--color-red) 15%, transparent);
 }
+.og-badge--rename {
+  color: var(--color-blue);
+  background: color-mix(in srgb, var(--color-blue) 15%, transparent);
+}
 
 .og-file__path {
   flex: 1 1 auto;
@@ -357,4 +361,12 @@
   border-top: 1px solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
+}
+
+/* --- confirm modal -------------------------------------------------------- */
+.og-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-4);
 }

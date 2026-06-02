@@ -148,7 +148,7 @@ packages/
   - [ ] **Crash republish gap:** `recover()` re-applies blesses but does not yet
         re-derive + republish *our own* `bless-<id>.json` from baseline's
         parent→baseline diff if it went missing (spec §recovery step 3).
-- [~] **Phase 3 — Plugin integration.** _First slice ✅ green + live._ The
+- [x] **Phase 3 — Plugin integration.** _✅ green + live._ The
   Phase-G panel now renders **real engine data** end-to-end; the live smoke
   (`pnpm test:plugin`) passes on the new design (inactive→activate→bless flow,
   asserted via the synced `_OG/sync/` signal files), and the populated panel is
@@ -185,10 +185,15 @@ packages/
         always built from the authoritative full walk). The plugin queues edited
         paths from `vault.on(...)` and `touch`es them in the debounced flush;
         the explicit Refresh button calls `rescan()`. +5 engine tests.
-  - [ ] **Still TODO:** a confirm-modal gate on rollback/restore; richer
-        peer/divergence UI; broader live assertions (restore-checkpoint,
-        multi-device ingest); persist the workIndex across reloads (today it
-        cold-primes once per session on the first touch/rescan).
+  - [x] **Confirm-modal gate** (`ConfirmModal` in `review-view.ts`): the two
+        destructive actions — rollback ("Undo these changes") and
+        restore-checkpoint — now require a Cancel/Confirm dialog before
+        discarding unblessed work. Per-file revert stays ungated (small, single
+        file; native file history covers it). Verified live in the container.
+  - [ ] **Deferred polish (Phase 5):** richer peer/divergence UI; broader live
+        assertions (restore-checkpoint, multi-device ingest); persist the
+        workIndex across reloads (today it cold-primes once per session on the
+        first touch/rescan).
 - [ ] **Phase 4 — Mobile (Android).** IndexedDB `ObjectStore`; Buffer polyfill
   via tsdown inject; the spike (isomorphic-git + IndexedDB round-trip); drop
   `isDesktopOnly`; sideload + Syncthing round-trip across the user's devices.
