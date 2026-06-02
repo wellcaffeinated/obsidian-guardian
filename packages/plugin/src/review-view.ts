@@ -404,8 +404,14 @@ export class ReviewView extends ItemView {
       this.fetchDiff(key, path, fromRef)
       return
     }
-    if (diff.binary) return ctx('Binary file — no line diff.')
-    if (diff.lines.length === 0) return ctx('No textual changes.')
+    if (diff.binary) {
+      ctx('Binary file — no line diff.')
+      return
+    }
+    if (diff.lines.length === 0) {
+      ctx('No textual changes.')
+      return
+    }
     for (const line of diff.lines) {
       const kind = line.sign === '+' ? 'add' : line.sign === '-' ? 'del' : 'ctx'
       box.createDiv({
