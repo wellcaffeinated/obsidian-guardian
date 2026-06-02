@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { PromiseFsClient } from 'isomorphic-git'
+import { randomId, sha256Hex } from './crypto-utils'
 import { ensureDir } from './fs-utils'
 
 /** Subdirectory (inside the gitDir) the engine owns for its own state. */
@@ -44,7 +44,7 @@ export async function readOrCreateReplicaId(
   if (existing) return existing
 
   await ensureDir(fs, dir)
-  const id = randomUUID()
+  const id = randomId()
   try {
     // Exclusive create so concurrent fresh onboards converge on the first
     // writer's id (node:fs honours `wx`; minimal mobile backends ignore the
@@ -86,5 +86,5 @@ export function changesFileName(
 }
 
 function replicaHash(replicaId: string): string {
-  return createHash('sha256').update(replicaId).digest('hex').slice(0, 12)
+  return sha256Hex(replicaId).slice(0, 12)
 }

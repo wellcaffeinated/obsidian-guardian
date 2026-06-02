@@ -257,8 +257,15 @@ packages/
   - [x] **`state.ts` node:fs leak closed:** `readSeq`/`nextSeq`/`*BlessHighWater`
         now take the injected `fs` (mkdirp via `ensureDir`); engine call-sites pass
         `this.fs`. The mobile IndexedDB spike exercises this through `bless`.
-  - [ ] **Remaining node:fs leak:** `node:crypto` (`randomUUID`/`createHash` in
-        `replica-id.ts`) still needs a mobile-safe path (Web Crypto) before Android.
+  - [x] **`node:crypto` leak closed:** `replica-id.ts` no longer statically
+        imports `node:crypto` (a load-time import would stop the engine loading
+        in the mobile WKWebView). New `crypto-utils.ts` gives `randomId()`
+        (`globalThis.crypto.randomUUID`) + a sync, dependency-free `sha256Hex()`
+        (Web Crypto's `subtle.digest` is async; our callers are sync), proven
+        byte-identical to `node:crypto` over the empty string, fixtures, unicode,
+        and every 64-byte-block residue (`test/crypto-utils.test.ts`). The engine
+        `src/` is now free of every node builtin except `node:path` (pure string
+        ops, fine in WKWebView).
   - [ ] Sideload + Syncthing round-trip across the user's devices.
 - [ ] **Phase 5 — Polish.** Peer/sync UX, packaging (later;
   community store is low priority).
@@ -325,11 +332,13 @@ the overlay workaround (`pnpm shot:stub`; see memory
   a bless *obligation* (`stillPending`) lives in `LocalState.pending`. A gated
   bless can leave status clean while the obligation persists (see the
   arrival-gate test).
-- Engine is mobile-clean on fs: `engine.ts`/`local-state.ts`/`signal-store.ts`/
+- Engine is mobile-clean: `engine.ts`/`local-state.ts`/`signal-store.ts`/
   `replica-id.ts`/`state.ts` all use the injected `fs` (via `ensureDir` for
-  mkdirp). `node:path` is import-only (pure string ops, fine in WKWebView);
-  `node:crypto` in `replica-id.ts` still needs a Web Crypto path for Android.
-  Don't assume `{recursive:true}` mkdir anywhere — use `ensureDir`.
+  mkdirp), and crypto goes through `crypto-utils.ts` (Web Crypto, no
+  `node:crypto`). The only remaining node builtin is `node:path` (import-only,
+  pure string ops, fine in WKWebView). Don't reintroduce a static
+  `node:crypto`/`node:fs` import in the engine, and don't assume
+  `{recursive:true}` mkdir anywhere — use `ensureDir`.
 - Test the plugin only in the headless container, never the real vault.
 
 ## Locked decisions
