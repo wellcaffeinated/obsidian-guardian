@@ -11,6 +11,7 @@ import {
   FileSystemAdapter,
   Notice,
   Plugin,
+  requireApiVersion,
   type TAbstractFile,
   type WorkspaceLeaf,
 } from 'obsidian'
@@ -144,12 +145,28 @@ export default class ObsidianGuardianPlugin
         await engine.onboard() // idempotent on an existing baseline
         await engine.recover() // re-apply synced blesses, republish state
         await this.reloadTimeline()
-      } else {
-        this.updateViews()
       }
     } catch (err) {
       this.fail('initialise', err)
     }
+    // Render any review tab restored from the saved workspace. Critical for
+    // Obsidian's deferred views (1.7.2+): a custom-view tab restored as the
+    // active tab stays a DeferredView until forced to load, so ReviewView.onOpen
+    // never fires and the tab shows blank. Force-load ours, then push state.
+    await this.renderOpenViews()
+  }
+
+  /**
+   * Ensure every open review leaf is a live {@link ReviewView} and re-rendered.
+   * `loadIfDeferred` un-defers a view restored from the workspace (constructing
+   * it + running `onOpen`); used sparingly (only our own views) per the deferred
+   * -views guidance. Then {@link updateViews} pushes current data + status bar.
+   */
+  private async renderOpenViews(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW)) {
+      if (requireApiVersion('1.7.2')) await leaf.loadIfDeferred()
+    }
+    this.updateViews()
   }
 
   /** Resolve config + construct the engine (no side effects on the repo). */
@@ -412,14 +429,17 @@ export default class ObsidianGuardianPlugin
 
   private async openPanel(): Promise<void> {
     const { workspace } = this.app
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_REVIEW)
-    if (existing.length > 0 && existing[0]) {
-      workspace.revealLeaf(existing[0])
-      return
+    let leaf: WorkspaceLeaf | undefined =
+      workspace.getLeavesOfType(VIEW_TYPE_REVIEW)[0]
+    if (!leaf) {
+      leaf = workspace.getLeaf(true)
+      await leaf.setViewState({ type: VIEW_TYPE_REVIEW, active: true })
     }
-    const leaf = workspace.getLeaf(true)
-    await leaf.setViewState({ type: VIEW_TYPE_REVIEW, active: true })
-    workspace.revealLeaf(leaf)
+    // Reveal first, then un-defer: a freshly-revealed leaf may still be a
+    // DeferredView, so force it to load (running onOpen) before we render.
+    await workspace.revealLeaf(leaf)
+    if (requireApiVersion('1.7.2')) await leaf.loadIfDeferred()
+    if (leaf.view instanceof ReviewView) leaf.view.update()
   }
 
   private async loadSettings(): Promise<void> {
