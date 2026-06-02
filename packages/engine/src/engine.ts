@@ -7,6 +7,7 @@ import {
   DEFAULT_IGNORE,
   DEFAULT_MARKER,
   DEFAULT_REVIEW_FOLDER,
+  FRESHNESS_WINDOW_MS,
 } from './defaults'
 import { decode, isBinary, lineStats } from './diff-stats'
 import {
@@ -40,6 +41,12 @@ import {
 } from './replica-id'
 import { renderReviewNote } from './review-note'
 import {
+  readBlessRecords,
+  syncDirPath,
+  writeBlessRecord,
+  writeDeviceState,
+} from './signal-store'
+import {
   nextSeq,
   readBlessHighWater,
   readSeq,
@@ -51,7 +58,9 @@ import {
   type BlessRecord,
   type ChangeEntry,
   DELETED,
+  type DeviceState,
   type EngineConfig,
+  type LocalState,
   type Manifest,
   type SnapshotStatus,
   type Status,
@@ -124,6 +133,11 @@ export class ReviewEngine {
 
   private get vaultName(): string {
     return basename(this.vaultPath)
+  }
+
+  /** Absolute path of the synced signal folder (`<reviewFolder>/sync/`). */
+  private get syncDir(): string {
+    return syncDirPath(this.vaultPath, this.reviewFolder)
   }
 
   private isIgnored = (path: string): boolean =>
@@ -259,6 +273,11 @@ export class ReviewEngine {
     state.blessSeq = rec.seq
     state.observedSeq[self] = rec.seq
     await writeLocalState(this.fs, this.gitDir, state)
+    // Publish last: the baseline ref move (in applyBless) is the durable commit
+    // point; the signal file is derivable from it, so a crash before this line
+    // is recoverable on the next ingest.
+    await writeBlessRecord(this.fs, this.syncDir, rec)
+    await this.publishDeviceState(state)
     return rec
   }
 
@@ -280,7 +299,10 @@ export class ReviewEngine {
   async applyBless(rec: BlessRecord): Promise<ApplyResult> {
     const baselineCommit = await resolveRef(this.ctx)
     const entries: Map<string, FlatEntry> = baselineCommit
-      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, baselineCommit))
+      ? await readFlatTree(
+          this.ctx,
+          await readTreeOid(this.ctx, baselineCommit),
+        )
       : new Map()
 
     let changed = false
@@ -320,6 +342,81 @@ export class ReviewEngine {
       )
     }
     return { changed, stillPending }
+  }
+
+  /**
+   * Ingest peers' synced bless records (call on a debounced sync-settle). Folds
+   * **fresh** records (seq above our per-client high-water mark) together with
+   * still-`pending` ones through {@link applyBless}, drops stale/superseded
+   * records (the freshness window + seq dedup), retains the still-gated, and
+   * republishes our {@link DeviceState}. Idempotent: re-running converges.
+   * Returns whether our baseline advanced this pass.
+   */
+  async ingest(): Promise<{ changed: boolean }> {
+    const self = await this.ensureReplicaId()
+    const state = await readLocalState(this.fs, this.gitDir, self)
+    const records = await readBlessRecords(this.fs, this.syncDir)
+
+    const fresh: BlessRecord[] = []
+    for (const rec of records) {
+      if (rec.client === self) continue // our own bless is already applied
+      const seen = state.observedSeq[rec.client] ?? 0
+      if (rec.seq > seen) {
+        fresh.push(rec)
+        state.observedSeq[rec.client] = rec.seq
+      }
+    }
+
+    let changed = false
+    const retained = new Map<string, BlessRecord>() // by client → highest seq
+    for (const rec of [...fresh, ...state.pending]) {
+      if (this.isStale(rec, state)) continue
+      const res = await this.applyBless(rec)
+      if (res.changed) changed = true
+      if (res.stillPending) {
+        const prev = retained.get(rec.client)
+        if (!prev || rec.seq > prev.seq) retained.set(rec.client, rec)
+      }
+    }
+    state.pending = [...retained.values()]
+    await writeLocalState(this.fs, this.gitDir, state)
+    await this.publishDeviceState(state)
+    return { changed }
+  }
+
+  /**
+   * Crash / re-bootstrap recovery (call once on startup). Re-applies **every**
+   * synced bless record unconditionally — `applyBless` is idempotent, so this
+   * converges regardless of where a prior crash landed, and reconstructs the
+   * baseline on a device whose local object store was lost (only unblessed
+   * checkpoint history is unrecoverable). Then runs a normal {@link ingest} to
+   * refresh bookkeeping and republish device state.
+   */
+  async recover(): Promise<void> {
+    for (const rec of await readBlessRecords(this.fs, this.syncDir)) {
+      await this.applyBless(rec)
+    }
+    await this.ingest()
+  }
+
+  /** A bless is stale if a newer one from the same client won, or it has aged out. */
+  private isStale(rec: BlessRecord, state: LocalState): boolean {
+    if (rec.seq < (state.observedSeq[rec.client] ?? 0)) return true
+    const age = Date.now() - Date.parse(rec.blessedAt)
+    return Number.isFinite(age) && age > FRESHNESS_WINDOW_MS
+  }
+
+  /** Publish this device's presence/housekeeping state to the synced folder. */
+  private async publishDeviceState(state: LocalState): Promise<void> {
+    const baseline = await resolveRef(this.ctx)
+    const ds: DeviceState = {
+      client: state.self,
+      head: await readSeq(this.gitDir),
+      observedSeq: state.observedSeq,
+      updatedAt: new Date().toISOString(),
+    }
+    if (baseline) ds.baselineDigest = await readTreeOid(this.ctx, baseline)
+    await writeDeviceState(this.fs, this.syncDir, ds)
   }
 
   /**

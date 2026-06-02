@@ -29,7 +29,10 @@ export async function readLocalState(
   self: ClientId,
 ): Promise<LocalState> {
   try {
-    const raw = (await fs.promises.readFile(coordPath(gitDir), 'utf8')) as string
+    const raw = (await fs.promises.readFile(
+      coordPath(gitDir),
+      'utf8',
+    )) as string
     const parsed = JSON.parse(raw) as Partial<LocalState>
     return {
       self,

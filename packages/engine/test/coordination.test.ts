@@ -1,5 +1,5 @@
 import * as nodeFs from 'node:fs'
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ReviewEngine } from '@obsidian-guardian/engine'
@@ -14,7 +14,11 @@ afterEach(async () => {
   }
 })
 
-async function write(vault: string, rel: string, content: string): Promise<void> {
+async function write(
+  vault: string,
+  rel: string,
+  content: string,
+): Promise<void> {
   const file = join(vault, rel)
   await mkdir(dirname(file), { recursive: true })
   await writeFile(file, content)
@@ -23,19 +27,27 @@ async function write(vault: string, rel: string, content: string): Promise<void>
 /** A device = its own working tree (a synced copy) + its own non-synced gitDir. */
 async function device(
   seed: Record<string, string> = {},
-): Promise<{ engine: ReviewEngine; vault: string }> {
+): Promise<{ engine: ReviewEngine; vault: string; root: string }> {
   const root = await mkdtemp(join(tmpdir(), 'guardian-coord-'))
   tmpRoots.push(root)
   const vault = join(root, 'vault')
   await mkdir(vault, { recursive: true })
-  for (const [rel, content] of Object.entries(seed)) await write(vault, rel, content)
+  for (const [rel, content] of Object.entries(seed))
+    await write(vault, rel, content)
   const engine = new ReviewEngine({
     fs: nodeFs,
     vaultPath: vault,
     gitDir: join(root, 'gitdb'),
   })
   await engine.onboard()
-  return { engine, vault }
+  return { engine, vault, root }
+}
+
+/** Simulate Syncthing: copy the synced signal folder from one vault to another. */
+async function syncSignals(fromVault: string, toVault: string): Promise<void> {
+  await cp(join(fromVault, '_OG', 'sync'), join(toVault, '_OG', 'sync'), {
+    recursive: true,
+  })
 }
 
 describe('bless — delta manifest', () => {
@@ -173,5 +185,69 @@ describe('applyBless — content gate', () => {
     expect((await a.engine.status()).clean).toBe(true)
     expect((await b.engine.status()).clean).toBe(true)
     expect((await b.engine.status()).marker).not.toBeNull()
+  })
+})
+
+describe('ingest — synced signal files end to end', () => {
+  it('applies a peer bless that synced in alongside its content', async () => {
+    const a = await device({ 'note.md': 'v0\n' })
+    const b = await device({ 'note.md': 'v0\n' })
+    await write(a.vault, 'note.md', 'v1\n')
+    await a.engine.bless() // writes bless-<A>.json into a's _OG/sync
+    // Syncthing converges content + signal folder to B.
+    await write(b.vault, 'note.md', 'v1\n')
+    await syncSignals(a.vault, b.vault)
+    expect(await b.engine.ingest()).toEqual({ changed: true })
+    expect((await b.engine.status()).clean).toBe(true)
+    // Re-ingest is a no-op (seq high-water dedup).
+    expect(await b.engine.ingest()).toEqual({ changed: false })
+  })
+
+  it('defers a bless whose bytes have not synced, then applies on retry', async () => {
+    const a = await device({ 'note.md': 'v0\n' })
+    const b = await device({ 'note.md': 'v0\n' })
+    await write(a.vault, 'note.md', 'v1\n')
+    await a.engine.bless()
+    await syncSignals(a.vault, b.vault) // signal arrived before content
+    expect(await b.engine.ingest()).toEqual({ changed: false })
+    expect((await b.engine.status()).clean).toBe(true) // working tree still v0
+    // Content lands; the retained pending record now admits.
+    await write(b.vault, 'note.md', 'v1\n')
+    expect(await b.engine.ingest()).toEqual({ changed: true })
+    expect((await b.engine.status()).clean).toBe(true)
+  })
+
+  it('only the latest of two blesses from a peer is applied (dedup)', async () => {
+    const a = await device({ 'note.md': 'v0\n' })
+    const b = await device({ 'note.md': 'v0\n' })
+    await write(a.vault, 'note.md', 'v1\n')
+    await a.engine.bless()
+    await write(a.vault, 'note.md', 'v2\n')
+    await a.engine.bless() // bless file overwritten in place → only seq 2 visible
+    await write(b.vault, 'note.md', 'v2\n')
+    await syncSignals(a.vault, b.vault)
+    expect(await b.engine.ingest()).toEqual({ changed: true })
+    expect((await b.engine.status()).clean).toBe(true)
+  })
+
+  it('recover() rebuilds a converged baseline and is idempotent', async () => {
+    const a = await device({ 'note.md': 'v0\n' })
+    const b = await device({ 'note.md': 'v0\n' })
+    await write(a.vault, 'note.md', 'v1\n')
+    await a.engine.bless()
+    await write(b.vault, 'note.md', 'v1\n')
+    await syncSignals(a.vault, b.vault)
+    // Fresh gitDir on B (its device-local store was evicted) → re-bootstrap from
+    // the synced bless records, content-addressed and self-contained.
+    const reborn = new ReviewEngine({
+      fs: nodeFs,
+      vaultPath: b.vault,
+      gitDir: join(b.root, 'gitdb2'),
+    })
+    await reborn.onboard()
+    await reborn.recover()
+    expect((await reborn.status()).clean).toBe(true)
+    await reborn.recover() // idempotent
+    expect((await reborn.status()).clean).toBe(true)
   })
 })

@@ -12,6 +12,14 @@ export {
 } from './replica-id'
 export { renderReviewNote } from './review-note'
 export {
+  ownSignalFiles,
+  readBlessRecords,
+  readDeviceStates,
+  syncDirPath,
+  writeBlessRecord,
+  writeDeviceState,
+} from './signal-store'
+export {
   type ApplyResult,
   type Author,
   type BlessRecord,
