@@ -1,53 +1,97 @@
-import type { Status } from '@obsidian-guardian/engine'
-import {
-  type App,
-  ButtonComponent,
-  ItemView,
-  Modal,
-  Setting,
-  type WorkspaceLeaf,
-} from 'obsidian'
-import { describeStatus, shortMarker } from './format'
+import { ItemView, setIcon, type WorkspaceLeaf } from 'obsidian'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
 
-/**
- * Per-machine activation state. `loading` = engine still initialising;
- * `inactive` = this machine has never been activated (no local history yet),
- * so we render an explicit opt-in and touch nothing; `active` = onboarded here
- * and reviewing normally.
- */
-export type ActivationState = 'loading' | 'inactive' | 'active'
+// ---------------------------------------------------------------------------
+// MOCK DATA — Phase G stub. Detached from the engine.
+//
+// Model: one time-ordered timeline (newest first).
+//   • CURRENT = live vault, no hash; diff "baseline..current"; Accept / Undo.
+//     The Checkpoint button freezes current into a hashed checkpoint inserted
+//     right below the current row (current itself never changes).
+//   • CHECKPOINT = frozen snapshot; expand → diff "<hash>..current"; Restore.
+//   • BASELINE = last blessed checkpoint, a non-expandable time marker.
+// ---------------------------------------------------------------------------
 
-/**
- * What the panel needs from the plugin. Keeps the view decoupled from the
- * concrete `Plugin` (and trivially fakeable in tests).
- */
-export interface ReviewController {
-  /** Whether this machine is loading / not-yet-activated / actively reviewing. */
-  getActivationState(): ActivationState
-  /** Explicitly begin reviewing on this machine (onboard the local history). */
-  activate(): Promise<void>
-  /** The latest computed status, or null before the engine has initialised. */
-  getStatus(): Status | null
-  /** Recompute status + rewrite the review note. */
-  refresh(): Promise<void>
-  /** Advance the baseline marker to the current state. */
-  bless(): Promise<void>
-  /** Reset the whole work-tree back to the baseline. */
-  rollback(): Promise<void>
-  /** Open a vault note by its vault-relative path. */
-  openNote(path: string): Promise<void>
+type ChangeKind = 'add' | 'modify' | 'delete'
+
+interface FileChange {
+  kind: ChangeKind
+  path: string
+  added: number
+  removed: number
+  diff?: Array<{ sign: ' ' | '+' | '-'; text: string }>
 }
 
-/** A vault-wide review panel: header + per-file change list + bless/rollback. */
-export class ReviewView extends ItemView {
-  private readonly controller: ReviewController
+type Entry =
+  | { type: 'current'; when: string; changes: FileChange[] }
+  | { type: 'checkpoint'; when: string; hash: string; since: FileChange[] }
+  | { type: 'baseline'; when: string; hash: string }
 
-  constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
+const INITIAL: Entry[] = [
+  {
+    type: 'current',
+    when: 'Today, 14:42',
+    changes: [
+      {
+        kind: 'modify',
+        path: 'Projects/Roastery.md',
+        added: 12,
+        removed: 3,
+        diff: [
+          { sign: ' ', text: '## Roadmap' },
+          { sign: '-', text: '- [ ] pick a grinder' },
+          { sign: '+', text: '- [x] pick a grinder (Niche Zero)' },
+          { sign: '+', text: '- [ ] dial in espresso' },
+          { sign: ' ', text: '' },
+          { sign: '+', text: 'See [[p2p-bless]] for the sync model.' },
+        ],
+      },
+      { kind: 'add', path: 'Daily/2026-06-01.md', added: 40, removed: 0 },
+      { kind: 'modify', path: 'Ideas/p2p-bless.md', added: 5, removed: 5 },
+      { kind: 'modify', path: 'attachments/diagram.canvas', added: 1, removed: 1 },
+      { kind: 'delete', path: 'Archive/old-note.md', added: 0, removed: 88 },
+    ],
+  },
+  {
+    type: 'checkpoint',
+    when: 'Today, 14:30',
+    hash: '9f3a1c2',
+    since: [
+      { kind: 'modify', path: 'Projects/Roastery.md', added: 1, removed: 0 },
+      { kind: 'modify', path: 'Daily/2026-06-01.md', added: 12, removed: 0 },
+    ],
+  },
+  { type: 'baseline', when: 'Today, 14:15', hash: '7e2b8d1' },
+  {
+    type: 'checkpoint',
+    when: 'Yesterday, 22:10',
+    hash: '3c4c845',
+    since: [
+      { kind: 'modify', path: 'Projects/Roastery.md', added: 12, removed: 3 },
+      { kind: 'add', path: 'Daily/2026-06-01.md', added: 40, removed: 0 },
+      { kind: 'modify', path: 'Ideas/p2p-bless.md', added: 5, removed: 5 },
+      { kind: 'delete', path: 'Archive/old-note.md', added: 0, removed: 88 },
+    ],
+  },
+]
+
+const MOCK = { peers: 2, updatedAgo: '2 min ago' }
+
+const KIND_ABBR: Record<ChangeKind, string> = {
+  add: 'ADD',
+  modify: 'MOD',
+  delete: 'DEL',
+}
+
+/** A vault-wide review panel (Phase G design stub, mock data only). */
+export class ReviewView extends ItemView {
+  private timeline: Entry[] = INITIAL.map((e) => ({ ...e }))
+  private readonly open = new Set<string>(['9f3a1c2'])
+
+  constructor(leaf: WorkspaceLeaf) {
     super(leaf)
-    this.controller = controller
   }
 
   getViewType(): string {
@@ -55,7 +99,7 @@ export class ReviewView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'Vault review'
+    return 'Guardian'
   }
 
   getIcon(): string {
@@ -66,7 +110,6 @@ export class ReviewView extends ItemView {
     this.render()
   }
 
-  /** Re-render from the controller's latest status (called after every refresh). */
   update(): void {
     this.render()
   }
@@ -74,184 +117,212 @@ export class ReviewView extends ItemView {
   private render(): void {
     const root = this.contentEl
     root.empty()
-    root.addClass('og-review')
+    root.addClass('og')
+    this.renderHeader(root)
+    this.renderToolbar(root)
 
-    if (this.controller.getActivationState() === 'inactive') {
-      this.renderInactive(root)
-      return
+    // Current is always first; everything after it is "history".
+    const [current, ...history] = this.timeline
+    if (current && current.type === 'current') this.renderCurrent(root, current)
+
+    if (history.length) {
+      root.createDiv({ cls: 'og-history-label', text: 'History' })
+      const list = root.createDiv({ cls: 'og-timeline' })
+      for (const entry of history) {
+        if (entry.type === 'baseline') this.renderBaseline(list, entry)
+        else if (entry.type === 'checkpoint') this.renderCheckpoint(list, entry)
+      }
     }
+    this.renderFooter(root)
+  }
 
-    const status = this.controller.getStatus()
+  private renderHeader(root: HTMLElement): void {
+    const header = root.createDiv({ cls: 'og-header' })
+    const title = header.createDiv({ cls: 'og-title' })
+    setIcon(title.createSpan({ cls: 'og-title__icon' }), 'shield-check')
+    title.createSpan({ cls: 'og-title__text', text: 'Vault review' })
+    header.createDiv({
+      cls: 'og-peers',
+      text: `${MOCK.peers} peers · updated ${MOCK.updatedAgo}`,
+    })
+  }
 
-    this.renderHeader(root, status)
-    this.renderActions(root, status)
+  private renderToolbar(root: HTMLElement): void {
+    const bar = root.createDiv({ cls: 'og-toolbar' })
+    this.button(bar, 'refresh-cw', 'Refresh', () => this.update())
+    this.button(bar, 'camera', 'Checkpoint', () => this.doCheckpoint())
+  }
 
-    if (status === null) {
-      root.createDiv({ cls: 'og-review__empty', text: 'Initialising…' })
-      return
-    }
-    if (status.clean) {
-      root.createDiv({
-        cls: 'og-review__empty',
-        text: 'Clean — nothing pending since the last blessed baseline.',
+  /** Freeze current into a hashed checkpoint inserted right below current. */
+  private doCheckpoint(): void {
+    const hash = Math.random().toString(16).slice(2, 9)
+    this.timeline.splice(1, 0, {
+      type: 'checkpoint',
+      when: 'Today, 14:42',
+      hash,
+      since: [],
+    })
+    this.render()
+  }
+
+  // --- current: live state, no hash, always expanded ------------------------
+
+  private renderCurrent(
+    parent: HTMLElement,
+    entry: Extract<Entry, { type: 'current' }>,
+  ): void {
+    const card = parent.createDiv({ cls: 'og-entry og-entry--current' })
+    const head = card.createDiv({ cls: 'og-entry__head og-entry__head--static' })
+    this.renderTitle(head, 'Current', 'current', entry.when)
+
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    this.renderCompare(body, 'baseline..current', `${entry.changes.length} files changed`)
+    for (const change of entry.changes) this.renderFileRow(body, change, true)
+
+    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    this.button(actions, 'check-check', 'Accept as Baseline', undefined, 'cta')
+    this.button(actions, 'undo-2', 'Undo these changes', undefined, 'warn')
+  }
+
+  // --- checkpoint: frozen snapshot, collapsible -----------------------------
+
+  private renderCheckpoint(
+    parent: HTMLElement,
+    entry: Extract<Entry, { type: 'checkpoint' }>,
+  ): void {
+    const isOpen = this.open.has(entry.hash)
+    const card = parent.createDiv({ cls: 'og-entry og-entry--history' })
+    const head = card.createDiv({ cls: 'og-entry__head' })
+    setIcon(
+      head.createSpan({ cls: 'og-entry__caret' }),
+      isOpen ? 'chevron-down' : 'chevron-right',
+    )
+    this.renderTitle(head, 'Checkpoint', 'checkpoint', entry.when)
+    head.createSpan({ cls: 'og-entry__hash', text: entry.hash })
+    head.addEventListener('click', () => this.toggle(entry.hash))
+    if (!isOpen) return
+
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    if (entry.since.length === 0) {
+      body.createDiv({
+        cls: 'og-compare',
+        text: 'No changes since this checkpoint — identical to current.',
       })
       return
     }
-    this.renderList(root, status)
+    this.renderCompare(body, `${entry.hash}..current`, 'Restore reverts these files')
+    for (const change of entry.since) this.renderFileRow(body, change, false)
+    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    this.button(actions, 'rotate-ccw', 'Restore this checkpoint', undefined, 'warn')
   }
 
-  /**
-   * The not-yet-activated state. Reviewing is opt-in *per machine* so that two
-   * desktops syncing the same vault don't both silently spin up a git history
-   * and emit competing review notes. Until the user clicks Activate, the plugin
-   * writes nothing.
-   */
-  private renderInactive(root: HTMLElement): void {
-    const header = root.createDiv({ cls: 'og-review__header' })
-    header.createEl('h2', { text: 'Vault review' })
-    header.createSpan({
-      cls: 'og-review__meta',
-      text: 'not active on this machine',
+  // --- baseline: slim, non-expandable time marker ---------------------------
+
+  private renderBaseline(
+    parent: HTMLElement,
+    entry: Extract<Entry, { type: 'baseline' }>,
+  ): void {
+    const marker = parent.createDiv({ cls: 'og-marker' })
+    marker.createSpan({ cls: 'og-kind og-kind--baseline', text: 'Baseline' })
+    marker.createSpan({ cls: 'og-marker__when', text: `— ${entry.when}` })
+    marker.createSpan({ cls: 'og-marker__hash', text: entry.hash })
+    marker.createDiv({ cls: 'og-marker__rule' })
+  }
+
+  // --- shared bits ----------------------------------------------------------
+
+  private renderTitle(
+    head: HTMLElement,
+    kind: string,
+    kindCls: string,
+    when: string,
+  ): void {
+    const title = head.createSpan({ cls: 'og-entry__title' })
+    title.createSpan({ cls: `og-kind og-kind--${kindCls}`, text: kind })
+    title.createSpan({ cls: 'og-entry__when', text: ` — ${when}` })
+  }
+
+  private renderCompare(parent: HTMLElement, range: string, note: string): void {
+    const row = parent.createDiv({ cls: 'og-compare' })
+    row.createSpan({ cls: 'og-compare__range', text: range })
+    row.createSpan({ cls: 'og-compare__note', text: `· ${note}` })
+  }
+
+  private renderFileRow(
+    parent: HTMLElement,
+    change: FileChange,
+    revertable: boolean,
+  ): void {
+    const wrap = parent.createDiv({ cls: 'og-file' })
+    const row = wrap.createDiv({ cls: 'og-file__row' })
+
+    if (change.diff) {
+      setIcon(row.createSpan({ cls: 'og-file__caret' }), 'chevron-down')
+    } else {
+      row.createSpan({ cls: 'og-file__caret og-file__caret--none' })
+    }
+
+    row.createSpan({
+      cls: `og-badge og-badge--${change.kind}`,
+      text: KIND_ABBR[change.kind],
     })
 
+    const path = row.createSpan({ cls: 'og-file__path' })
+    const parts = change.path.split('/')
+    const name = parts.pop() ?? change.path
+    if (parts.length) {
+      path.createSpan({ cls: 'og-file__dir', text: `${parts.join('/')}/` })
+    }
+    path.createSpan({ cls: 'og-file__name', text: name })
+
+    const stats = row.createSpan({ cls: 'og-file__stats' })
+    if (change.added) stats.createSpan({ cls: 'og-stat-add', text: `+${change.added}` })
+    if (change.removed) stats.createSpan({ cls: 'og-stat-del', text: `−${change.removed}` })
+
+    if (revertable) {
+      const revert = row.createSpan({
+        cls: 'og-file__revert',
+        attr: { 'aria-label': 'Revert this file to baseline' },
+      })
+      setIcon(revert, 'undo-2')
+    }
+
+    if (change.diff) {
+      const diff = wrap.createDiv({ cls: 'og-diff' })
+      for (const line of change.diff) {
+        diff.createDiv({
+          cls: `og-diff__line og-diff__line--${line.sign === '+' ? 'add' : line.sign === '-' ? 'del' : 'ctx'}`,
+          text: `${line.sign} ${line.text}`,
+        })
+      }
+    }
+  }
+
+  private renderFooter(root: HTMLElement): void {
     root.createDiv({
-      cls: 'og-review__empty',
-      text:
-        'This machine isn’t reviewing this vault yet. Activating creates a ' +
-        'local change-history stored outside the vault, on this device only, ' +
-        'and starts tracking changes here. Other devices are unaffected — each ' +
-        'reviews independently.',
-    })
-
-    const actions = root.createDiv({ cls: 'og-review__actions' })
-    new ButtonComponent(actions)
-      .setButtonText('Start reviewing on this machine')
-      .setIcon('shield-check')
-      .setCta()
-      .onClick(() => {
-        void this.controller.activate()
-      })
-  }
-
-  private renderHeader(root: HTMLElement, status: Status | null): void {
-    const header = root.createDiv({ cls: 'og-review__header' })
-    header.createEl('h2', { text: 'Vault review' })
-    if (!status) return
-    const count = status.changes.length
-    const summary = status.clean
-      ? 'clean'
-      : `${count} change${count === 1 ? '' : 's'} pending`
-    header.createSpan({
-      cls: 'og-review__meta',
-      text: `${summary} · baseline ${shortMarker(status.marker)}`,
+      cls: 'og-footer',
+      text: 'Checkpoints are stored on this device only and never synced. Blessing the baseline is coordinated across your devices.',
     })
   }
 
-  private renderActions(root: HTMLElement, status: Status | null): void {
-    const actions = root.createDiv({ cls: 'og-review__actions' })
-
-    new ButtonComponent(actions)
-      .setButtonText('Refresh')
-      .setIcon('refresh-cw')
-      .onClick(() => {
-        void this.controller.refresh()
-      })
-
-    const bless = new ButtonComponent(actions)
-      .setButtonText('Bless')
-      .setIcon('check-check')
-      .setCta()
-      .onClick(() => {
-        void this.controller.bless()
-      })
-
-    const rollback = new ButtonComponent(actions)
-      .setButtonText('Roll back')
-      .setIcon('rotate-ccw')
-      .setWarning()
-      .onClick(() => {
-        new ConfirmModal(this.app, {
-          title: 'Roll back to baseline?',
-          body: 'This restores every file in the vault to the last blessed baseline and discards all pending changes. This cannot be undone from here.',
-          cta: 'Roll back',
-          onConfirm: () => {
-            void this.controller.rollback()
-          },
-        }).open()
-      })
-
-    // Nothing to bless or roll back when clean / not yet initialised.
-    const disabled = status === null || status.clean
-    bless.setDisabled(disabled)
-    rollback.setDisabled(disabled)
+  private toggle(key: string): void {
+    if (this.open.has(key)) this.open.delete(key)
+    else this.open.add(key)
+    this.render()
   }
 
-  private renderList(root: HTMLElement, status: Status): void {
-    const list = root.createEl('ul', { cls: 'og-review__list' })
-    for (const row of describeStatus(status)) {
-      const li = list.createEl('li', { cls: 'og-review__row' })
-      li.createSpan({
-        cls: `og-review__kind og-review__kind--${row.kind}`,
-        text: row.kind,
-      })
-      const path = li.createSpan({ cls: 'og-review__path' })
-      if (row.markdown) {
-        const link = path.createEl('a', { text: row.path, href: '#' })
-        link.addEventListener('click', (evt) => {
-          evt.preventDefault()
-          void this.controller.openNote(row.path)
-        })
-      } else {
-        path.setText(row.path)
-      }
-      if (row.from) {
-        path.createSpan({
-          cls: 'og-review__meta',
-          text: `  (from ${row.from})`,
-        })
-      }
-      li.createSpan({ cls: 'og-review__stats', text: row.stats })
-    }
-  }
-}
-
-/** A minimal yes/no confirmation dialog. */
-export class ConfirmModal extends Modal {
-  private readonly opts: {
-    title: string
-    body: string
-    cta: string
-    onConfirm: () => void
-  }
-
-  constructor(
-    app: App,
-    opts: { title: string; body: string; cta: string; onConfirm: () => void },
-  ) {
-    super(app)
-    this.opts = opts
-  }
-
-  override onOpen(): void {
-    const { contentEl } = this
-    contentEl.createEl('h3', { text: this.opts.title })
-    contentEl.createEl('p', { text: this.opts.body })
-    new Setting(contentEl)
-      .addButton((btn) =>
-        btn.setButtonText('Cancel').onClick(() => this.close()),
-      )
-      .addButton((btn) =>
-        btn
-          .setButtonText(this.opts.cta)
-          .setWarning()
-          .onClick(() => {
-            this.close()
-            this.opts.onConfirm()
-          }),
-      )
-  }
-
-  override onClose(): void {
-    this.contentEl.empty()
+  private button(
+    parent: HTMLElement,
+    icon: string,
+    label: string,
+    onClick?: () => void,
+    variant?: 'cta' | 'warn',
+  ): void {
+    const btn = parent.createEl('button', {
+      cls: `og-btn${variant ? ` og-btn--${variant}` : ''}`,
+    })
+    setIcon(btn.createSpan({ cls: 'og-btn__icon' }), icon)
+    btn.createSpan({ text: label })
+    if (onClick) btn.addEventListener('click', onClick)
   }
 }

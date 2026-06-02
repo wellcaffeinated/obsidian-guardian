@@ -1,76 +1,343 @@
-/* Obsidian Guardian review panel */
-.og-review {
-  padding: 0 var(--size-4-4);
+/* Obsidian Guardian — review panel (Phase G design stub, v2) */
+
+.og {
+  padding: 0 var(--size-4-4) var(--size-4-6);
+  max-width: 56rem;
+  margin: 0 auto;
 }
 
-.og-review__header {
+/* --- header --------------------------------------------------------------- */
+.og-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--size-4-2);
-  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-3) 0 var(--size-4-2);
 }
-
-.og-review__meta {
+.og-title {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+.og-title__icon {
+  display: flex;
+  color: var(--interactive-accent);
+}
+.og-title__text {
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-bold);
+}
+.og-peers {
+  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
-  font-size: var(--font-ui-small);
 }
 
-.og-review__actions {
+/* --- toolbar -------------------------------------------------------------- */
+.og-toolbar {
   display: flex;
   gap: var(--size-4-2);
-  margin-bottom: var(--size-4-4);
-}
-
-.og-review__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.og-review__row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--size-4-2);
-  padding: var(--size-4-1) 0;
+  padding-bottom: var(--size-4-3);
+  margin-bottom: var(--size-4-3);
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.og-review__kind {
-  flex: 0 0 auto;
+/* --- buttons -------------------------------------------------------------- */
+.og-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  padding: var(--size-4-1) var(--size-4-3);
+  font-size: var(--font-ui-small);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.og-btn:hover {
+  background: var(--interactive-hover);
+}
+.og-btn__icon {
+  display: flex;
+}
+.og-btn__icon .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+/* Double-class + !important to beat Obsidian's default `button` styling. */
+.og-btn.og-btn--cta {
+  background: var(--interactive-accent) !important;
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent) !important;
+  font-weight: var(--font-medium);
+}
+.og-btn.og-btn--cta:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+.og-btn.og-btn--warn {
+  color: var(--text-error) !important;
+  border-color: color-mix(in srgb, var(--text-error) 35%, var(--background-modifier-border));
+}
+.og-btn.og-btn--warn:hover {
+  background: color-mix(in srgb, var(--text-error) 12%, transparent) !important;
+}
+
+/* --- timeline entries ----------------------------------------------------- */
+.og-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+.og-entry {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+/* the current card: emphasized */
+.og-entry--current {
+  border-color: color-mix(in srgb, var(--interactive-accent) 50%, var(--background-modifier-border));
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+/* history entries: quieter */
+.og-entry--history {
+  background: var(--background-primary-alt);
+  border-color: var(--background-modifier-border);
+}
+
+/* "History" divider between current and the timeline */
+.og-history-label {
+  margin: var(--size-4-5) 0 var(--size-4-2);
   font-size: var(--font-ui-smaller);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  min-width: 4.5em;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  font-weight: var(--font-semibold);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: var(--size-4-1);
 }
 
-.og-review__kind--add {
-  color: var(--color-green);
+.og-entry__head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
+  cursor: pointer;
 }
-.og-review__kind--modify {
-  color: var(--color-yellow);
+.og-entry__head:hover {
+  background: var(--background-modifier-hover);
 }
-.og-review__kind--delete {
-  color: var(--color-red);
+.og-entry__head--static {
+  cursor: default;
 }
-.og-review__kind--rename {
-  color: var(--color-blue);
+.og-entry__head--static:hover {
+  background: transparent;
 }
-
-.og-review__path {
+.og-entry--current .og-entry__head {
+  background: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+}
+.og-entry__caret {
+  display: flex;
+  color: var(--text-faint);
+}
+.og-entry__caret .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+.og-entry__title {
   flex: 1 1 auto;
-  word-break: break-word;
+  font-weight: var(--font-medium);
+}
+.og-entry__hash {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
 }
 
-.og-review__stats {
-  flex: 0 0 auto;
-  font-family: var(--font-monospace);
+/* type word in an entry title: "Current — …", "Checkpoint — …", "Baseline — …" */
+.og-kind {
+  font-weight: var(--font-semibold);
+}
+.og-kind--current {
+  color: var(--interactive-accent);
+}
+.og-kind--baseline {
+  color: var(--interactive-accent);
+}
+.og-kind--checkpoint {
+  color: var(--text-normal);
+}
+.og-entry__when {
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+}
+
+.og-entry__body {
+  padding: var(--size-4-1) var(--size-4-3) var(--size-4-3);
+}
+.og-entry__actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-3);
+}
+
+/* baseline marker — a slim, non-expandable line in the timeline */
+.og-marker {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+}
+.og-marker__when {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
+.og-marker__hash {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.og-marker__rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
 
-.og-review__empty {
+/* comparison label: muted `a..b` range + clarifier */
+.og-compare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--size-4-1);
+  padding: var(--size-4-1) 0 var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+}
+.og-compare__range {
+  font-family: var(--font-monospace);
   color: var(--text-muted);
-  padding: var(--size-4-4) 0;
+}
+.og-compare__note {
+  color: var(--text-faint);
+}
+
+/* --- file rows ------------------------------------------------------------ */
+.og-file {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.og-file:last-of-type {
+  border-bottom: none;
+}
+.og-file__row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) 0;
+}
+.og-file__caret {
+  display: flex;
+  color: var(--text-faint);
+  width: 1em;
+}
+.og-file__caret .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+.og-file__caret--none {
+  visibility: hidden;
+}
+
+.og-badge {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: var(--font-bold);
+  letter-spacing: 0.05em;
+  padding: 0.12em 0.45em;
+  border-radius: var(--radius-s);
+  min-width: 2.9em;
+  text-align: center;
+}
+.og-badge--add {
+  color: var(--color-green);
+  background: color-mix(in srgb, var(--color-green) 15%, transparent);
+}
+.og-badge--modify {
+  color: var(--color-yellow);
+  background: color-mix(in srgb, var(--color-yellow) 15%, transparent);
+}
+.og-badge--delete {
+  color: var(--color-red);
+  background: color-mix(in srgb, var(--color-red) 15%, transparent);
+}
+
+.og-file__path {
+  flex: 1 1 auto;
+  word-break: break-word;
+  min-width: 0;
+}
+.og-file__dir {
+  color: var(--text-faint);
+}
+.og-file__name {
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
+}
+.og-file__stats {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--size-4-2);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+.og-stat-add {
+  color: var(--color-green);
+}
+.og-stat-del {
+  color: var(--color-red);
+}
+.og-file__revert {
+  display: flex;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 var(--size-4-1);
+}
+.og-file__revert:hover {
+  color: var(--text-normal);
+}
+.og-file__revert .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+
+/* --- inline diff ---------------------------------------------------------- */
+.og-diff {
+  margin: 0 0 var(--size-4-2) calc(1em + var(--size-4-2));
+  border-left: 2px solid var(--background-modifier-border);
+  padding-left: var(--size-4-3);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
+.og-diff__line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.og-diff__line--add {
+  color: var(--color-green);
+  background: color-mix(in srgb, var(--color-green) 8%, transparent);
+}
+.og-diff__line--del {
+  color: var(--color-red);
+  background: color-mix(in srgb, var(--color-red) 8%, transparent);
+}
+.og-diff__line--ctx {
+  color: var(--text-muted);
+}
+
+/* --- footer --------------------------------------------------------------- */
+.og-footer {
+  margin-top: var(--size-4-5);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
 }
