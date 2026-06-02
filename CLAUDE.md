@@ -120,10 +120,34 @@ packages/
   - [ ] **Model shifts** (likely fold into Phase 2): baseline advanced per-path;
         trim old machinery (`snapshot`/`writeSnapshot`/`changes-file`/
         `replica-id`/`state`/review-note).
-- [ ] **Phase 2 — Coordination layer.** Synced `_OG/sync/` JSON
-  (`bless-<id>` / `device-<id>`), `applyBless` (content gate + arrival defer),
-  debounced ingest, crash-recovery (idempotent re-ingest), retention (last-N
-  blessed + unblessed window), re-bootstrap from synced blesses.
+- [~] **Phase 2 — Coordination layer.** _Core built (engine-only)._
+  - [x] **Coordination types** (`types.ts`): `ClientId`/`Hash`/`Seq`/`Path`,
+        `DELETED` sentinel, `ManifestEntry`/`Manifest`, `DeviceState`,
+        `BlessRecord`, `LocalState`, `ApplyResult`.
+  - [x] **Tree overlay primitives** (`git-ops.ts`): `readFlatTree`/`writeFlatTree`
+        (recursive nested-tree build), `writeBlob`/`hashBlob` — so the baseline
+        advances **per path** (old baseline tree ⊕ admitted blobs, atomic ref move).
+  - [x] **`applyBless` content gate** (`engine.ts`): per-file LWW register, no
+        vector clock. Simultaneously arrival gate / causal cut / conflict
+        resolver. `bless()` now emits a delta `BlessRecord` (absolute hashes +
+        tombstones), advances our own baseline, publishes the signal files.
+  - [x] **Synced signal store** (`signal-store.ts`): `_OG/sync/` JSON
+        (`device-<id>.json` + `bless-<id>.json`, single-writer LWW); read peers.
+  - [x] **`ingest()`** (debounced sync-settle): fold fresh+pending peer blesses
+        through the gate, seq-dedup + `FRESHNESS_WINDOW_MS` (30d), retain gated,
+        republish `DeviceState`. **`recover()`**: idempotent re-apply of all
+        blesses for crash / re-bootstrap (lost device store).
+  - [x] **`LocalState` persistence** (`local-state.ts`): `observedSeq`,
+        `blessSeq`, `pending` in the non-synced gitDir.
+  - Green: **49 engine tests** (incl. 13 new coordination: gate idempotent /
+    commutative / causal-cut / arrival-defer / tombstone / converge / e2e ingest
+    / recover), typecheck, knip, build. Full workspace 74 tests still green.
+  - [ ] **Retention/GC** (deferred — spec says pruning never breaks correctness):
+        keep last-N blessed (baseline first-parent chain) + unblessed-checkpoint
+        window; `pending` already pruned by freshness.
+  - [ ] **Crash republish gap:** `recover()` re-applies blesses but does not yet
+        re-derive + republish *our own* `bless-<id>.json` from baseline's
+        parent→baseline diff if it went missing (spec §recovery step 3).
 - [ ] **Phase 3 — Plugin integration.** Wire engine + coordination into the
   Phase-G panel (real data); per-device activation; event-driven **incremental**
   hashing (mandatory — full rescans are too slow on mobile); settings.
@@ -136,32 +160,48 @@ packages/
 ### Resume here (session handoff)
 
 **State:** branch `plan/p2p-bless-protocol`, worktree `.worktrees/p2p-bless`
-(install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅; all
-gates green (`pnpm test` = 61, `pnpm typecheck`, `pnpm build`, `pnpm lint`,
-`pnpm knip`). Last commits: `98bee51`/`9b12e93`/`9410576`.
+(install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
+**Phase-2 coordination core ✅** (engine-only). All gates green: `pnpm -r test`
+= **74** (49 engine / 9 cli / 16 plugin), `pnpm -r typecheck`, `pnpm knip`,
+engine `pnpm build`. Coordination commits on top of `98bee51`.
 
 **Next step — choose:**
-1. _Recommended:_ **Phase 2 coordination** — the differentiated core, and it
-   tells us exactly which old machinery to delete. Build the synced `_OG/sync/`
-   JSON (`device-<id>.json`, `bless-<id>.json`), `applyBless` (content gate +
-   arrival defer), debounced ingest, crash-recovery, retention, re-bootstrap.
-   Spec: **[`plans/p2p-bless-protocol.md`](plans/p2p-bless-protocol.md)** §§3–8
-   (data shapes + pseudo-code are written there — follow them).
-2. Or finish Phase 1: the **composite routing `fs`** (plan §Storage model) +
-   trim `replica-id.ts`/`state.ts`/`changes-file.ts`/`review-note.ts` and the
-   engine's `snapshot`/`writeSnapshot`/`blessSnapshot` (old file-controlled-bless
-   machinery the new design replaces).
+1. _Recommended:_ **Phase 3 — plugin integration.** Wire the real engine
+   coordination API into the Phase-G panel: per-device activation (gitDir
+   existence = activation flag), `vault.on(modify/create/delete/rename)` →
+   **incremental** re-hash (full rescans too slow on mobile) → debounced
+   `checkpoint()`/`refresh`, a watcher on `_OG/sync/` → debounced `ingest()`,
+   `recover()` on layout-ready, and Bless/Rollback buttons calling
+   `engine.bless()` / revert. New engine API to consume: `bless()→BlessRecord`,
+   `applyBless`, `ingest`, `recover` (`packages/engine/src/index.ts`).
+2. Or **trim old machinery** now that the new path exists: `review-note.ts`,
+   `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/`blessSnapshot`,
+   the rotating-file bits of `replica-id.ts`, and `state.ts`'s
+   `bless-hwm`/`snapshot-seq`. **Caution:** the CLI (`watch.ts`/`cli.ts`) +
+   plugin still call these; rip them out only with replacements wired, or those
+   green packages break. Lower urgency — the old machinery is inert, just unused
+   by the new flow.
+3. Or finish **retention/GC** + the **crash-republish** gap (both noted under
+   Phase 2 above).
 
-**Working references:** engine core = `packages/engine/src/{engine,git-ops,
-types}.ts` (now `fs`-injected); GUI stub = `packages/plugin/src/{main,
-review-view}.ts` + `styles.css` (mock data, v4). Screenshot the panel with
-**`pnpm shot:stub [out.png]`** (overlay workaround — real plugin mounts fine; see
-memory `headless-screenshot-deferred-view`). CLI (`packages/cli`) is legacy.
+**Working references:** coordination core = `packages/engine/src/{engine,
+git-ops,signal-store,local-state,types,defaults}.ts`; tests =
+`packages/engine/test/coordination.test.ts` (the convergence + ingest proofs).
+GUI stub = `packages/plugin/src/{main,review-view}.ts` + `styles.css` (mock
+data, v4); screenshot with **`pnpm shot:stub [out.png]`** (overlay workaround —
+see memory `headless-screenshot-deferred-view`). CLI (`packages/cli`) is legacy.
 
-**Watch-outs:** engine still pulls `node:fs` transitively via the old
-`replica-id`/`state` helpers (removed in Phase 2) and uses `node:path` (small
-swap later) — so it's not yet 100% mobile-clean. Test the plugin only in the
-headless container, never the real vault.
+**Watch-outs:**
+- The signal folder is `_OG/sync/`; `_OG/` is git-ignored, so signals **sync
+  but never commit** into the device-local store — keep it that way.
+- Two notions of "pending" differ: `status().clean` is working-tree-vs-baseline;
+  a bless *obligation* (`stillPending`) lives in `LocalState.pending`. A gated
+  bless can leave status clean while the obligation persists (see the
+  arrival-gate test).
+- Engine still pulls `node:fs` transitively via `replica-id.ts`/`state.ts`
+  (`node:fs/promises`) — not yet 100% mobile-clean; `local-state.ts`/
+  `signal-store.ts` correctly use the injected `fs`. `node:path` swap pending.
+- Test the plugin only in the headless container, never the real vault.
 
 ## Locked decisions
 
