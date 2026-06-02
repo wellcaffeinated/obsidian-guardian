@@ -57,6 +57,7 @@ export default class ObsidianGuardianPlugin
   private peers: PanelData['peers'] = null
   private refreshDebouncer: Debouncer | null = null
   private ingestDebouncer: Debouncer | null = null
+  private statusBarEl: HTMLElement | null = null
   /** Paths edited since the last flush, fed to engine.touch() before re-rendering. */
   private readonly pendingTouches = new Set<string>()
 
@@ -76,6 +77,12 @@ export default class ObsidianGuardianPlugin
         void this.openPanel()
       },
     )
+
+    this.statusBarEl = this.addStatusBarItem()
+    this.statusBarEl.addClass('mod-clickable')
+    this.statusBarEl.addEventListener('click', () => void this.openPanel())
+    this.renderStatusBar()
+
     this.addCommand({
       id: 'open-review-panel',
       name: 'Open vault review',
@@ -371,10 +378,26 @@ export default class ObsidianGuardianPlugin
   }
 
   private updateViews(): void {
+    this.renderStatusBar()
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW)) {
       const view = leaf.view
       if (view instanceof ReviewView) view.update()
     }
+  }
+
+  /** Reflect activation + pending count in the clickable status-bar item. */
+  private renderStatusBar(): void {
+    if (!this.statusBarEl) return
+    if (!this.active) {
+      this.statusBarEl.setText('OG: inactive')
+      return
+    }
+    if (!this.timeline) {
+      this.statusBarEl.setText('OG: —')
+      return
+    }
+    const n = this.timeline.current.length
+    this.statusBarEl.setText(n === 0 ? 'OG: clean' : `OG: ${n} pending`)
   }
 
   private async openPanel(): Promise<void> {

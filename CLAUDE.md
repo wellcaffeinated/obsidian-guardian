@@ -175,6 +175,11 @@ packages/
         `format.ts` (DOM-free test seam; 3 new plugin tests).
   - [x] **Settings tab** (`settings.ts`): gitDir / reviewFolder / marker /
         ignore / author; `hide()` persists + rebuilds the engine.
+  - [x] **Clickable status bar** (`OG: inactive` / `OG: clean` / `OG: N
+        pending`, opens the panel) — restored from the pre-rewrite plugin; it
+        had been dropped in the redesign. Plus a dead-code sweep: removed
+        `describeStatus`/`ChangeRow`/`describeChange` (the superseded first-slice
+        view-model, only referenced by its own tests).
   - [x] **Event-driven incremental hashing.** The engine keeps a `workIndex`
         (`path → blob oid`); `touch(path)` re-hashes one path, `rescan()` does an
         authoritative full reconcile. `buildChanges` uses the index when primed
