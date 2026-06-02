@@ -124,6 +124,16 @@ export default class ObsidianGuardianPlugin
     }, INGEST_DEBOUNCE_MS)
 
     this.registerVaultEvents()
+    // Deferred views (Obsidian 1.7.2+): a review tab only renders its content
+    // once its leaf is actually shown. onOpen can fire before the engine has
+    // data (or, for a restored tab, not at the moment we expect), leaving it
+    // blank. Re-render whenever our view becomes the active leaf — the reliable
+    // signal that it's now visible — so it always reflects current state.
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        if (leaf?.view instanceof ReviewView) leaf.view.update()
+      }),
+    )
     this.app.workspace.onLayoutReady(() => void this.init())
   }
 
