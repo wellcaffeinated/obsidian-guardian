@@ -106,10 +106,20 @@ packages/
   current card, `a..b` comparison labels. Iterated with the user to v4.
   Screenshot via **`pnpm shot:stub`** (overlay workaround for Obsidian deferred
   views — see memory). Settles the data the engine must expose.
-- [~] **Phase 1 — Engine storage refactor.** Introduce `WorkingTree` +
-  `ObjectStore` interfaces; port the existing isomorphic-git/node-fs logic onto
-  them; baseline becomes a commit ref advanced per-path; add a `checkpoints`
-  history; content-gated diff. Keep desktop green via Vitest. _← we are here._
+- [~] **Phase 1 — Engine storage refactor.** _← we are here._
+  - [x] **Inject `fs`** — `EngineConfig.fs: PromiseFsClient`; `git-ops.ts` +
+        `engine.ts` carry no static `node:fs` (sync ops → async). Desktop/CLI
+        inject `node:fs`; plugin injects a shim later. Green: 61 tests,
+        typecheck, build, lint, knip. (Interim: `replica-id.ts`/`state.ts` still
+        import `node:fs/promises` — they're old-signal-file machinery removed in
+        Phase 2; `node:path` swap is a small follow-up.)
+  - [ ] **Composite routing `fs`** — one `PromiseFsClient` routing
+        worktree-paths vs gitdir-paths to two backends (both `node:fs` on
+        desktop; worktree→adapter / gitdir→IndexedDB on mobile). See plan
+        §Storage model.
+  - [ ] **Model shifts** (likely fold into Phase 2): baseline advanced per-path;
+        trim old machinery (`snapshot`/`writeSnapshot`/`changes-file`/
+        `replica-id`/`state`/review-note).
 - [ ] **Phase 2 — Coordination layer.** Synced `_OG/sync/` JSON
   (`bless-<id>` / `device-<id>`), `applyBless` (content gate + arrival defer),
   debounced ingest, crash-recovery (idempotent re-ingest), retention (last-N
