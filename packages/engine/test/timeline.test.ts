@@ -198,6 +198,32 @@ describe('fileDiff', () => {
   })
 })
 
+describe('bless preserves the previous baseline', () => {
+  it('leaves a restorable checkpoint of the pre-bless state', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'two\n')
+    await engine.bless()
+
+    // The baseline advanced to `two`, and the previous baseline (`one`) is now a
+    // checkpoint, so blessing can be undone.
+    const cps = await engine.listCheckpoints()
+    expect(cps).toHaveLength(1)
+    const tl = await engine.timeline()
+    // The preserved checkpoint is the previous baseline's tree, not the new one.
+    expect(cps[0]?.tree).not.toBe(tl.baseline.tree)
+
+    await engine.restoreCheckpoint(cps[0]?.oid ?? '')
+    const { readFile } = await import('node:fs/promises')
+    expect(await readFile(join(vault, 'a.md'), 'utf8')).toBe('one\n')
+  })
+
+  it('does not create a checkpoint when a bless does not advance the baseline', async () => {
+    const { engine } = await freshEngine({ 'a.md': 'one\n' })
+    await engine.bless() // nothing pending → baseline unchanged
+    expect(await engine.listCheckpoints()).toEqual([])
+  })
+})
+
 describe('restoreCheckpoint', () => {
   it('resets the working tree to a checkpoint without moving the baseline', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })

@@ -285,7 +285,20 @@ export class ReviewEngine {
       manifest,
       blessedAt: new Date().toISOString(),
     }
+    const baselineBefore = await resolveRef(this.ctx)
     await this.applyBless(rec)
+    // Preserve the pre-bless baseline as a restorable checkpoint, so a bless can
+    // be undone (rolled back to the previous blessed state) — including the very
+    // first baseline. Only when the baseline actually advanced.
+    const baselineAfter = await resolveRef(this.ctx)
+    if (baselineBefore && baselineAfter && baselineBefore !== baselineAfter) {
+      const seq = await nextSeq(this.fs, this.gitDir)
+      await writeRef(
+        this.ctx,
+        `refs/og/checkpoints/${pad(seq)}`,
+        baselineBefore,
+      )
+    }
     // The manifest came from the authoritative full walk; drop the incremental
     // index so the next read re-primes from disk (no phantom diff if an edit
     // event was ever missed). bless is user-initiated and rare — one rescan is fine.
@@ -431,7 +444,7 @@ export class ReviewEngine {
     const baseline = await resolveRef(this.ctx)
     const ds: DeviceState = {
       client: state.self,
-      head: await readSeq(this.gitDir),
+      head: await readSeq(this.fs, this.gitDir),
       observedSeq: state.observedSeq,
       updatedAt: new Date().toISOString(),
     }
@@ -455,7 +468,7 @@ export class ReviewEngine {
     if (changes.length === 0) {
       return {
         oid: baseline ?? '',
-        seq: await readSeq(this.gitDir),
+        seq: await readSeq(this.fs, this.gitDir),
         created: false,
       }
     }
@@ -469,7 +482,7 @@ export class ReviewEngine {
       'checkpoint: snapshot',
       baseline ? [baseline] : [],
     )
-    const seq = await nextSeq(this.gitDir)
+    const seq = await nextSeq(this.fs, this.gitDir)
     await writeRef(this.ctx, `refs/og/checkpoints/${pad(seq)}`, oid)
     return { oid, seq, created: true }
   }
@@ -483,7 +496,7 @@ export class ReviewEngine {
    * any changes after the snapshot remain pending.
    */
   async blessSnapshot(oid: string, seq: number): Promise<boolean> {
-    if (seq <= (await readBlessHighWater(this.gitDir))) return false
+    if (seq <= (await readBlessHighWater(this.fs, this.gitDir))) return false
     const tree = await readTreeOid(this.ctx, oid)
     const baseline = await resolveRef(this.ctx)
     await commitTree(
@@ -493,7 +506,7 @@ export class ReviewEngine {
       tree,
       baseline ? [baseline] : [],
     )
-    await writeBlessHighWater(this.gitDir, seq)
+    await writeBlessHighWater(this.fs, this.gitDir, seq)
     return true
   }
 
@@ -557,6 +570,7 @@ export class ReviewEngine {
       if (!oid) continue
       out.push({
         oid,
+        tree: await readTreeOid(this.ctx, oid),
         seq: Number(leaf),
         when: await readCommitTime(this.ctx, oid),
       })
@@ -585,6 +599,7 @@ export class ReviewEngine {
       baseline: {
         oid: baseline,
         when: baseline ? await readCommitTime(this.ctx, baseline) : null,
+        tree: baseline ? await readTreeOid(this.ctx, baseline) : null,
       },
       current,
       checkpoints,

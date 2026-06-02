@@ -51,6 +51,9 @@ export interface FileRow {
 export interface CheckpointRow {
   /** Full checkpoint commit oid (the restore target). */
   oid: string
+  /** Tree oid (content address) — lets the view recognise a checkpoint that
+   * equals the baseline and collapse it into the baseline marker. */
+  tree: string
   /** Short oid for display. */
   shortHash: string
   seq: number
@@ -65,7 +68,12 @@ export interface PanelData {
   /** Whether this device has activated reviewing (gitDir baseline exists). */
   active: boolean
   /** Baseline marker, or null when not yet onboarded. */
-  baseline: { shortHash: string; when: string | null } | null
+  baseline: {
+    shortHash: string
+    when: string | null
+    /** Baseline tree oid, for matching checkpoints that equal it. */
+    tree: string | null
+  } | null
   /** Pending changes: baseline → working tree. */
   current: FileRow[]
   /** Device-local checkpoints, newest seq first. */
@@ -116,10 +124,12 @@ export function buildPanelData(args: {
     baseline: {
       shortHash: shortMarker(timeline.baseline.oid),
       when: timeline.baseline.when,
+      tree: timeline.baseline.tree,
     },
     current: timeline.current.map(toFileRow),
     checkpoints: timeline.checkpoints.map((cp) => ({
       oid: cp.oid,
+      tree: cp.tree,
       shortHash: cp.oid.slice(0, 7),
       seq: cp.seq,
       when: cp.when,

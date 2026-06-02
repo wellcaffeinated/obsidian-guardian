@@ -254,10 +254,11 @@ packages/
         (as `fs.promises`), gitdir→LightningFS (live IndexedDB, not faked); wire
         the plugin to build them per-platform; drop `platform:'node'`/
         `isDesktopOnly`.
-  - [ ] **Remaining node:fs leak:** `state.ts` still imports `node:fs/promises`
-        (legacy `bless-hwm`/`snapshot-seq`); convert or trim with the old
-        machinery. `node:crypto` (`randomUUID`/`createHash` in `replica-id.ts`)
-        also needs a mobile-safe path (Web Crypto) before Android.
+  - [x] **`state.ts` node:fs leak closed:** `readSeq`/`nextSeq`/`*BlessHighWater`
+        now take the injected `fs` (mkdirp via `ensureDir`); engine call-sites pass
+        `this.fs`. The mobile IndexedDB spike exercises this through `bless`.
+  - [ ] **Remaining node:fs leak:** `node:crypto` (`randomUUID`/`createHash` in
+        `replica-id.ts`) still needs a mobile-safe path (Web Crypto) before Android.
   - [ ] Sideload + Syncthing round-trip across the user's devices.
 - [ ] **Phase 5 — Polish.** Peer/sync UX, packaging (later;
   community store is low priority).
@@ -324,12 +325,11 @@ the overlay workaround (`pnpm shot:stub`; see memory
   a bless *obligation* (`stillPending`) lives in `LocalState.pending`. A gated
   bless can leave status clean while the obligation persists (see the
   arrival-gate test).
-- Engine is nearly mobile-clean on fs: `engine.ts`/`local-state.ts`/
-  `signal-store.ts`/`replica-id.ts` all use the injected `fs` (via `ensureDir`
-  for mkdirp). **Remaining static `node:fs/promises`: `state.ts`** (legacy
-  `bless-hwm`/`snapshot-seq`). `node:path` is import-only (pure string ops, fine
-  in WKWebView); `node:crypto` in `replica-id.ts` still needs a Web Crypto path
-  for Android. Don't assume `{recursive:true}` mkdir anywhere — use `ensureDir`.
+- Engine is mobile-clean on fs: `engine.ts`/`local-state.ts`/`signal-store.ts`/
+  `replica-id.ts`/`state.ts` all use the injected `fs` (via `ensureDir` for
+  mkdirp). `node:path` is import-only (pure string ops, fine in WKWebView);
+  `node:crypto` in `replica-id.ts` still needs a Web Crypto path for Android.
+  Don't assume `{recursive:true}` mkdir anywhere — use `ensureDir`.
 - Test the plugin only in the headless container, never the real vault.
 
 ## Locked decisions

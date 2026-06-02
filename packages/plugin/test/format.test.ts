@@ -95,11 +95,13 @@ describe('buildPanelData', () => {
       baseline: {
         oid: 'abcdef1234567890',
         when: '2026-05-31T00:00:00.000Z',
+        tree: 'tree-baseline',
       },
       current: [added, modified],
       checkpoints: [
         {
           oid: '9f3a1c2deadbeef0',
+          tree: 'tree-checkpoint',
           seq: 2,
           when: '2026-05-31T01:00:00.000Z',
           changes: [renamed],
@@ -115,11 +117,13 @@ describe('buildPanelData', () => {
     expect(data.baseline).toEqual({
       shortHash: 'abcdef1',
       when: '2026-05-31T00:00:00.000Z',
+      tree: 'tree-baseline',
     })
     expect(data.current.map((r) => r.path)).toEqual(['a.md', 'b.md'])
     expect(data.checkpoints).toHaveLength(1)
     expect(data.checkpoints[0]).toMatchObject({
       oid: '9f3a1c2deadbeef0',
+      tree: 'tree-checkpoint',
       shortHash: '9f3a1c2',
       seq: 2,
     })

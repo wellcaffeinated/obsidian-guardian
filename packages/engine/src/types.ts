@@ -67,6 +67,8 @@ export interface SnapshotStatus {
 export interface Checkpoint {
   /** Full 40-char checkpoint commit oid. */
   oid: string
+  /** Tree oid recorded by the checkpoint commit (its content address). */
+  tree: string
   /** Monotonic per-gitDir sequence number. */
   seq: number
   /** ISO-8601 commit time of the checkpoint. */
@@ -97,8 +99,12 @@ export interface TimelineEntry extends Checkpoint {
  * `checkpoints` (newest seq first), each carrying its diff to the working tree.
  */
 export interface Timeline {
-  /** Baseline (last blessed) commit oid + its commit time, or nulls if none. */
-  baseline: { oid: string | null; when: string | null }
+  /**
+   * Baseline (last blessed) commit oid, its commit time, and its tree oid, or
+   * nulls if there is no baseline yet. The `tree` lets the panel recognise a
+   * checkpoint whose content equals the baseline and render it as the baseline.
+   */
+  baseline: { oid: string | null; when: string | null; tree: string | null }
   /** Pending changes from baseline → the working tree, sorted by path. */
   current: ChangeEntry[]
   /** Device-local checkpoints, newest seq first. */
