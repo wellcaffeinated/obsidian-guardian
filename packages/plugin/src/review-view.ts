@@ -1,4 +1,4 @@
-import { ItemView, setIcon, type WorkspaceLeaf } from 'obsidian'
+import { ItemView, setIcon } from 'obsidian'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
@@ -50,7 +50,12 @@ const INITIAL: Entry[] = [
       },
       { kind: 'add', path: 'Daily/2026-06-01.md', added: 40, removed: 0 },
       { kind: 'modify', path: 'Ideas/p2p-bless.md', added: 5, removed: 5 },
-      { kind: 'modify', path: 'attachments/diagram.canvas', added: 1, removed: 1 },
+      {
+        kind: 'modify',
+        path: 'attachments/diagram.canvas',
+        added: 1,
+        removed: 1,
+      },
       { kind: 'delete', path: 'Archive/old-note.md', added: 0, removed: 88 },
     ],
   },
@@ -89,10 +94,6 @@ const KIND_ABBR: Record<ChangeKind, string> = {
 export class ReviewView extends ItemView {
   private timeline: Entry[] = INITIAL.map((e) => ({ ...e }))
   private readonly open = new Set<string>(['9f3a1c2'])
-
-  constructor(leaf: WorkspaceLeaf) {
-    super(leaf)
-  }
 
   getViewType(): string {
     return VIEW_TYPE_REVIEW
@@ -172,11 +173,17 @@ export class ReviewView extends ItemView {
     entry: Extract<Entry, { type: 'current' }>,
   ): void {
     const card = parent.createDiv({ cls: 'og-entry og-entry--current' })
-    const head = card.createDiv({ cls: 'og-entry__head og-entry__head--static' })
+    const head = card.createDiv({
+      cls: 'og-entry__head og-entry__head--static',
+    })
     this.renderTitle(head, 'Current', 'current', entry.when)
 
     const body = card.createDiv({ cls: 'og-entry__body' })
-    this.renderCompare(body, 'baseline..current', `${entry.changes.length} files changed`)
+    this.renderCompare(
+      body,
+      'baseline..current',
+      `${entry.changes.length} files changed`,
+    )
     for (const change of entry.changes) this.renderFileRow(body, change, true)
 
     const actions = body.createDiv({ cls: 'og-entry__actions' })
@@ -210,10 +217,20 @@ export class ReviewView extends ItemView {
       })
       return
     }
-    this.renderCompare(body, `${entry.hash}..current`, 'Restore reverts these files')
+    this.renderCompare(
+      body,
+      `${entry.hash}..current`,
+      'Restore reverts these files',
+    )
     for (const change of entry.since) this.renderFileRow(body, change, false)
     const actions = body.createDiv({ cls: 'og-entry__actions' })
-    this.button(actions, 'rotate-ccw', 'Restore this checkpoint', undefined, 'warn')
+    this.button(
+      actions,
+      'rotate-ccw',
+      'Restore this checkpoint',
+      undefined,
+      'warn',
+    )
   }
 
   // --- baseline: slim, non-expandable time marker ---------------------------
@@ -242,7 +259,11 @@ export class ReviewView extends ItemView {
     title.createSpan({ cls: 'og-entry__when', text: ` — ${when}` })
   }
 
-  private renderCompare(parent: HTMLElement, range: string, note: string): void {
+  private renderCompare(
+    parent: HTMLElement,
+    range: string,
+    note: string,
+  ): void {
     const row = parent.createDiv({ cls: 'og-compare' })
     row.createSpan({ cls: 'og-compare__range', text: range })
     row.createSpan({ cls: 'og-compare__note', text: `· ${note}` })
@@ -276,8 +297,10 @@ export class ReviewView extends ItemView {
     path.createSpan({ cls: 'og-file__name', text: name })
 
     const stats = row.createSpan({ cls: 'og-file__stats' })
-    if (change.added) stats.createSpan({ cls: 'og-stat-add', text: `+${change.added}` })
-    if (change.removed) stats.createSpan({ cls: 'og-stat-del', text: `−${change.removed}` })
+    if (change.added)
+      stats.createSpan({ cls: 'og-stat-add', text: `+${change.added}` })
+    if (change.removed)
+      stats.createSpan({ cls: 'og-stat-del', text: `−${change.removed}` })
 
     if (revertable) {
       const revert = row.createSpan({

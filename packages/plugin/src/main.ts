@@ -11,9 +11,13 @@ export default class ObsidianGuardianPlugin extends Plugin {
   override async onload(): Promise<void> {
     this.registerView(VIEW_TYPE_REVIEW, (leaf) => new ReviewView(leaf))
 
-    this.addRibbonIcon('shield-check', 'Obsidian Guardian: vault review', () => {
-      void this.openPanel()
-    })
+    this.addRibbonIcon(
+      'shield-check',
+      'Obsidian Guardian: vault review',
+      () => {
+        void this.openPanel()
+      },
+    )
 
     this.addCommand({
       id: 'open-review-panel',
