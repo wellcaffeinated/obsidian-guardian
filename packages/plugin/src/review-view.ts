@@ -11,6 +11,12 @@ import type { CheckpointRow, FileRow, PanelData } from './format'
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
 
+/** Build stamp inlined by tsdown's `define` (`build-YYYYMMDD-HHMM`); falls back
+ * to `dev` when running un-bundled (tests, where the global is undefined). */
+declare const __OG_BUILD__: string | undefined
+const BUILD_ID =
+  typeof __OG_BUILD__ === 'string' && __OG_BUILD__ ? __OG_BUILD__ : 'dev'
+
 /**
  * What the {@link ReviewView} needs from its host (the plugin): the current
  * panel data plus the mutating actions. Kept as an interface so the view never
@@ -59,6 +65,17 @@ function formatWhen(iso: string | null): string {
   })
 }
 
+/** True when two file diffs are line-for-line identical (skip a needless re-render). */
+function sameDiff(a: FileDiff, b: FileDiff): boolean {
+  if (a.binary !== b.binary || a.lines.length !== b.lines.length) return false
+  for (let i = 0; i < a.lines.length; i++) {
+    const x = a.lines[i]
+    const y = b.lines[i]
+    if (x?.sign !== y?.sign || x?.text !== y?.text) return false
+  }
+  return true
+}
+
 /** The vault-wide review panel, rendered from the host {@link ReviewController}. */
 export class ReviewView extends ItemView {
   private readonly controller: ReviewController
@@ -73,10 +90,17 @@ export class ReviewView extends ItemView {
   private readonly openCheckpoints = new Set<string>()
   /** Expanded file rows, keyed `${fromRefKey}:${path}`. */
   private readonly openFiles = new Set<string>()
-  /** Lazily fetched per-file diffs, keyed like {@link openFiles}. Cleared on reload. */
+  /** Lazily fetched per-file diffs, keyed like {@link openFiles}. Kept across
+   * reloads and re-validated in place, so refreshing never flashes "Loading…". */
   private readonly diffs = new Map<string, FileDiff>()
   /** Keys with an in-flight fileDiff fetch (so we don't double-request). */
   private readonly fetching = new Set<string>()
+  /** Fetch params for each expandable row in the last render, keyed like
+   * {@link openFiles} — lets {@link revalidateOpenDiffs} re-fetch open diffs. */
+  private readonly fileMeta = new Map<
+    string,
+    { path: string; fromRef: string | undefined }
+  >()
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
     super(leaf)
@@ -101,16 +125,36 @@ export class ReviewView extends ItemView {
 
   /** Re-render from the host's current data. Called by the plugin after actions. */
   update(): void {
-    // Cached diffs are stale once the tree moves; re-fetch on demand for any
-    // rows still expanded. Expansion state itself persists across reloads.
-    this.diffs.clear()
+    // Re-render synchronously from the cached diffs first (so an open diff never
+    // flashes back to "Loading…"), then quietly re-validate any expanded diffs
+    // against the moved tree, re-rendering only if a *shown* diff actually
+    // changed. This removes the refresh flicker when diff details are open.
     this.render()
+    void this.revalidateOpenDiffs()
+  }
+
+  /** Re-fetch open diffs; swap + re-render only those whose content changed. */
+  private async revalidateOpenDiffs(): Promise<void> {
+    let dirty = false
+    for (const key of this.openFiles) {
+      if (this.fetching.has(key)) continue
+      const meta = this.fileMeta.get(key)
+      if (!meta) continue
+      const fresh = await this.controller.fileDiff(meta.path, meta.fromRef)
+      const prev = this.diffs.get(key)
+      if (!prev || !sameDiff(prev, fresh)) {
+        this.diffs.set(key, fresh)
+        dirty = true
+      }
+    }
+    if (dirty) this.render()
   }
 
   private render(): void {
     const data = this.controller.getData()
     const root = this.contentEl
     root.empty()
+    this.fileMeta.clear()
     root.addClass('og')
     this.renderHeader(root, data)
 
@@ -122,14 +166,39 @@ export class ReviewView extends ItemView {
 
     this.renderToolbar(root)
     this.renderCurrent(root, data)
-
-    if (data.checkpoints.length || data.baseline) {
-      root.createDiv({ cls: 'og-history-label', text: 'History' })
-      const list = root.createDiv({ cls: 'og-timeline' })
-      for (const cp of data.checkpoints) this.renderCheckpoint(list, cp)
-      if (data.baseline) this.renderBaseline(list, data.baseline)
-    }
+    this.renderHistory(root, data)
     this.renderFooter(root)
+  }
+
+  /**
+   * Render the History section: checkpoints and the baseline marker merged into
+   * one timeline, newest first. A checkpoint whose content equals the baseline IS
+   * the baseline, so it is collapsed into the baseline marker (not shown twice).
+   */
+  private renderHistory(root: HTMLElement, data: PanelData): void {
+    const { baseline } = data
+    const checkpoints = baseline?.tree
+      ? data.checkpoints.filter((cp) => cp.tree !== baseline.tree)
+      : data.checkpoints
+    if (checkpoints.length === 0 && !baseline) return
+
+    root.createDiv({ cls: 'og-history-label', text: 'History' })
+    const list = root.createDiv({ cls: 'og-timeline' })
+
+    const items: { when: string | null; render: () => void }[] =
+      checkpoints.map((cp) => ({
+        when: cp.when,
+        render: () => this.renderCheckpoint(list, cp),
+      }))
+    if (baseline) {
+      items.push({
+        when: baseline.when,
+        render: () => this.renderBaseline(list, baseline),
+      })
+    }
+    // Newest first; ISO-8601 UTC strings sort lexicographically.
+    items.sort((a, b) => (b.when ?? '').localeCompare(a.when ?? ''))
+    for (const item of items) item.render()
   }
 
   private renderHeader(root: HTMLElement, data: PanelData): void {
@@ -178,33 +247,35 @@ export class ReviewView extends ItemView {
     })
   }
 
-  // --- current: live state, no hash, always expanded ------------------------
+  // --- current: live state, flat (no card), always expanded -----------------
 
   private renderCurrent(parent: HTMLElement, data: PanelData): void {
-    const card = parent.createDiv({ cls: 'og-entry og-entry--current' })
-    const head = card.createDiv({
-      cls: 'og-entry__head og-entry__head--static',
+    const changed = data.current.length > 0
+    const section = parent.createDiv({ cls: 'og-current' })
+    const title = section.createDiv({ cls: 'og-current__title' })
+    title.createSpan({ cls: 'og-kind og-kind--current', text: 'Current State' })
+    title.createSpan({
+      cls: 'og-current__status',
+      text: ` — ${changed ? 'changed' : 'no changes'}`,
     })
-    this.renderTitle(head, 'Current', 'current', 'live')
 
-    const body = card.createDiv({ cls: 'og-entry__body' })
-    if (data.current.length === 0) {
-      body.createDiv({
+    if (!changed) {
+      section.createDiv({
         cls: 'og-compare',
         text: 'Nothing pending — the working tree matches the baseline.',
       })
       return
     }
     this.renderCompare(
-      body,
+      section,
       'baseline..current',
       `${data.current.length} file${data.current.length === 1 ? '' : 's'} changed`,
     )
     for (const change of data.current) {
-      this.renderFileRow(body, change, 'current', undefined, true)
+      this.renderFileRow(section, change, 'current', undefined, true)
     }
 
-    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    const actions = section.createDiv({ cls: 'og-entry__actions' })
     this.button(
       actions,
       'check-check',
@@ -288,20 +359,37 @@ export class ReviewView extends ItemView {
     )
   }
 
-  // --- baseline: slim, non-expandable time marker ---------------------------
+  // --- baseline: static card (like a checkpoint) with a Restore action ------
 
   private renderBaseline(
     parent: HTMLElement,
     baseline: NonNullable<PanelData['baseline']>,
   ): void {
-    const marker = parent.createDiv({ cls: 'og-marker' })
-    marker.createSpan({ cls: 'og-kind og-kind--baseline', text: 'Baseline' })
-    marker.createSpan({
-      cls: 'og-marker__when',
-      text: `— ${formatWhen(baseline.when)}`,
+    const card = parent.createDiv({ cls: 'og-entry og-entry--baseline' })
+    const head = card.createDiv({
+      cls: 'og-entry__head og-entry__head--static',
     })
-    marker.createSpan({ cls: 'og-marker__hash', text: baseline.shortHash })
-    marker.createDiv({ cls: 'og-marker__rule' })
+    this.renderTitle(head, 'Baseline', 'baseline', formatWhen(baseline.when))
+    head.createSpan({ cls: 'og-entry__hash', text: baseline.shortHash })
+
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    // Restore = roll the working tree back to the baseline — same action as the
+    // current card's "Undo these changes", so share its confirm dialog.
+    this.button(
+      actions,
+      'rotate-ccw',
+      'Restore',
+      () => {
+        this.confirm({
+          title: 'Discard all pending changes?',
+          body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
+          confirmText: 'Discard changes',
+          onConfirm: () => void this.controller.rollback(),
+        })
+      },
+      'warn',
+    )
   }
 
   // --- shared bits ----------------------------------------------------------
@@ -337,6 +425,7 @@ export class ReviewView extends ItemView {
     const key = `${fromRefKey}:${change.path}`
     const expandable = !change.binary
     const isOpen = expandable && this.openFiles.has(key)
+    if (expandable) this.fileMeta.set(key, { path: change.path, fromRef })
 
     const wrap = parent.createDiv({ cls: 'og-file' })
     const row = wrap.createDiv({ cls: 'og-file__row' })
@@ -359,7 +448,9 @@ export class ReviewView extends ItemView {
     const path = row.createSpan({ cls: 'og-file__path' })
     if (change.dir) path.createSpan({ cls: 'og-file__dir', text: change.dir })
     const name = path.createSpan({ cls: 'og-file__name', text: change.name })
-    if (change.markdown) {
+    // A deleted file no longer exists in the working tree — opening it would
+    // create a new empty note, so don't make it a link.
+    if (change.markdown && change.kind !== 'delete') {
       name.addClass('og-file__name--link')
       name.addEventListener('click', (e) => {
         e.stopPropagation() // don't also toggle the diff
@@ -452,10 +543,11 @@ export class ReviewView extends ItemView {
   }
 
   private renderFooter(root: HTMLElement): void {
-    root.createDiv({
-      cls: 'og-footer',
+    const footer = root.createDiv({ cls: 'og-footer' })
+    footer.createDiv({
       text: 'Checkpoints are stored on this device only and never synced. Blessing the baseline is coordinated across your devices.',
     })
+    footer.createDiv({ cls: 'og-footer__build', text: BUILD_ID })
   }
 
   private toggle(key: string): void {

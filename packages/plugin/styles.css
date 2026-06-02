@@ -58,6 +58,11 @@
 .og-btn:hover {
   background: var(--interactive-hover);
 }
+/* pressed (mousedown) feedback — a subtle push so clicks feel responsive */
+.og-btn:active {
+  background: var(--background-modifier-active-hover);
+  transform: translateY(1px);
+}
 .og-btn__icon {
   display: flex;
 }
@@ -76,6 +81,11 @@
 .og .og-btn.og-btn--cta:hover {
   background: var(--interactive-accent-hover);
 }
+.og .og-btn.og-btn--cta:active {
+  background: var(--interactive-accent-hover);
+  filter: brightness(0.92);
+  transform: translateY(1px);
+}
 .og .og-btn.og-btn--warn {
   color: var(--text-error);
   border-color: color-mix(
@@ -86,6 +96,10 @@
 }
 .og .og-btn.og-btn--warn:hover {
   background: color-mix(in srgb, var(--text-error) 12%, transparent);
+}
+.og .og-btn.og-btn--warn:active {
+  background: color-mix(in srgb, var(--text-error) 22%, transparent);
+  transform: translateY(1px);
 }
 
 /* --- timeline entries ----------------------------------------------------- */
@@ -113,6 +127,14 @@
 .og-entry--history {
   background: var(--background-primary-alt);
   border-color: var(--background-modifier-border);
+}
+/* baseline card: an outlined entry (like a checkpoint) tinted toward accent */
+.og-entry--baseline {
+  border-color: color-mix(
+    in srgb,
+    var(--interactive-accent) 35%,
+    var(--background-modifier-border)
+  );
 }
 
 /* "History" divider between current and the timeline */
@@ -191,26 +213,17 @@
   margin-top: var(--size-4-3);
 }
 
-/* baseline marker — a slim, non-expandable line in the timeline */
-.og-marker {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  padding: var(--size-4-1) var(--size-4-2);
+/* --- current: flat live-state section (no card) --------------------------- */
+.og-current {
+  padding: var(--size-4-1) 0 var(--size-4-3);
 }
-.og-marker__when {
-  font-size: var(--font-ui-smaller);
+.og-current__title {
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-medium);
+}
+.og-current__status {
   color: var(--text-muted);
-}
-.og-marker__hash {
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-}
-.og-marker__rule {
-  flex: 1 1 auto;
-  height: 1px;
-  background: color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+  font-weight: var(--font-normal);
 }
 
 /* comparison label: muted `a..b` range + clarifier */
@@ -367,6 +380,13 @@
   border-top: 1px solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
+}
+.og-footer__build {
+  margin-top: var(--size-4-2);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  opacity: 0.7;
 }
 
 /* --- confirm modal -------------------------------------------------------- */

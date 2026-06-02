@@ -1,6 +1,14 @@
 import { copyFile } from 'node:fs/promises'
 import { defineConfig } from 'tsdown'
 
+/** Auto-generated per build: `build-YYYYMMDD-HHMM` (local time). Inlined into
+ * the bundle via `define` and shown muted at the foot of the review panel. */
+function buildId(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `build-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+}
+
 /**
  * Obsidian loads a plugin as a single CommonJS `main.js` alongside its
  * `manifest.json` (+ optional `styles.css`). So: bundle everything (engine,
@@ -18,6 +26,9 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   dts: false,
+  define: {
+    __OG_BUILD__: JSON.stringify(buildId()),
+  },
   deps: {
     alwaysBundle: [/.*/],
     neverBundle: ['obsidian', 'electron'],
