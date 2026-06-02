@@ -10,6 +10,7 @@ import {
   FRESHNESS_WINDOW_MS,
 } from './defaults'
 import { decode, isBinary, lineDiff, lineStats } from './diff-stats'
+import { ensureDir } from './fs-utils'
 import {
   add,
   commit,
@@ -173,7 +174,8 @@ export class ReviewEngine {
   private async ensureReplicaId(): Promise<string> {
     if (this.resolvedReplicaId === undefined) {
       this.resolvedReplicaId =
-        this.configReplicaId ?? (await readOrCreateReplicaId(this.gitDir))
+        this.configReplicaId ??
+        (await readOrCreateReplicaId(this.fs, this.gitDir))
     }
     return this.resolvedReplicaId
   }
@@ -249,7 +251,7 @@ export class ReviewEngine {
   async refresh(): Promise<Status> {
     const status = await this.status()
     const dir = join(this.vaultPath, this.reviewFolder)
-    await this.fs.promises.mkdir(dir, { recursive: true })
+    await ensureDir(this.fs, dir)
     const name = await this.ensureReviewNoteName()
     await this.fs.promises.writeFile(
       join(dir, name),
@@ -537,7 +539,7 @@ export class ReviewEngine {
     )
     const content = renderChangesFile(status, this.vaultName)
     const dir = join(this.vaultPath, this.reviewFolder)
-    await this.fs.promises.mkdir(dir, { recursive: true })
+    await ensureDir(this.fs, dir)
     await this.fs.promises.writeFile(join(dir, fileName), content)
     return { status, fileName, content }
   }
@@ -660,7 +662,7 @@ export class ReviewEngine {
     const abs = join(this.vaultPath, path)
     const blob = await readMarkerBlob(this.ctx, path, fromRef)
     if (blob) {
-      await this.fs.promises.mkdir(dirname(abs), { recursive: true })
+      await ensureDir(this.fs, dirname(abs))
       await this.fs.promises.writeFile(abs, blob.blob)
       await add(this.ctx, path)
     } else {
@@ -723,7 +725,7 @@ export class ReviewEngine {
 
   private async seedExclude(): Promise<void> {
     const infoDir = join(this.gitDir, 'info')
-    await this.fs.promises.mkdir(infoDir, { recursive: true })
+    await ensureDir(this.fs, infoDir)
     const file = join(infoDir, 'exclude')
     let existing = ''
     try {

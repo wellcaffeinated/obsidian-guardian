@@ -509,11 +509,17 @@ content-addressed approval entirely).
   `fs.promises` shim is the bridge. We run **isomorphic-git over IndexedDB**
   (non-synced; adapter-files would leak to iCloud/Syncthing and collide
   per-device refs); eviction → re-bootstrap.
-- [ ] **Mobile spike (still required, but narrowed):** isomorphic-git +
-  LightningFS (IndexedDB `fs.promises`) + the Buffer polyfill round-tripping
-  blob/tree/commit on Obsidian iOS — the one combo obsidian-git itself doesn't
-  exercise (it uses adapter-fs, not LightningFS). Fallback if it fails: the
-  ~100-line Merkle KV over IndexedDB.
+- [x] **Mobile spike (Node-level ✅; on-device still pending):** isomorphic-git +
+  LightningFS (IndexedDB `fs.promises`) round-trips blob/tree/commit driven by the
+  real `ReviewEngine` through `createRoutingFs` (gitdir→LightningFS,
+  worktree→node:fs), verified with `fake-indexeddb` in
+  `packages/engine/test/indexeddb-store.spike.test.ts` (onboard→bless + byte
+  round-trip via revert). Surfaced + fixed two node:fs-isms the engine relied on
+  (`mkdir {recursive}`, `replica-id` static fs). **Still to verify on real
+  hardware:** the Buffer polyfill in the WKWebView and live IndexedDB on Android
+  (fake-indexeddb is not the real engine). Fallback if on-device fails: the
+  ~100-line Merkle KV over IndexedDB. The Merkle-KV fallback now looks unlikely
+  given the Node round-trip works unmodified.
 - [ ] **Incremental hashing is mandatory on mobile, not an optimisation.**
   obsidian-git reports a full ~3000-file status at **~3m40s on an iPad Pro M1**.
   Drive diffing from `vault.on(modify/create/delete/rename)` events (re-hash only

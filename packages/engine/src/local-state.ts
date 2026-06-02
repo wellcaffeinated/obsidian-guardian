@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { PromiseFsClient } from 'isomorphic-git'
+import { ensureDir } from './fs-utils'
 import type { ClientId, LocalState } from './types'
 
 /** Subdirectory (inside the gitDir) the engine owns for its own state. */
@@ -57,7 +58,7 @@ export async function writeLocalState(
   state: LocalState,
 ): Promise<void> {
   const dir = join(gitDir, STATE_DIR)
-  await fs.promises.mkdir(dir, { recursive: true })
+  await ensureDir(fs, dir)
   await fs.promises.writeFile(
     coordPath(gitDir),
     `${JSON.stringify(state, null, 2)}\n`,

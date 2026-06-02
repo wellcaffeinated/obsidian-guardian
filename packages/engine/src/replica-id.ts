@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { PromiseFsClient } from 'isomorphic-git'
+import { ensureDir } from './fs-utils'
 
 /** Subdirectory (inside the gitDir) the engine owns for its own state. */
 const STATE_DIR = 'obsidian-guardian'
@@ -8,9 +9,12 @@ const STATE_DIR = 'obsidian-guardian'
 const REPLICA_FILE = 'replica-id'
 
 /** Read a trimmed, non-empty id from a file, or null if absent/empty. */
-async function readId(file: string): Promise<string | null> {
+async function readId(
+  fs: PromiseFsClient,
+  file: string,
+): Promise<string | null> {
   try {
-    const value = (await readFile(file, 'utf8')).trim()
+    const value = ((await fs.promises.readFile(file, 'utf8')) as string).trim()
     return value.length > 0 ? value : null
   } catch {
     return null
@@ -29,21 +33,27 @@ async function readId(file: string): Promise<string | null> {
  * Creation is an exclusive (`wx`) write, so two processes onboarding a fresh
  * shared gitDir at once converge on the first writer's id.
  */
-export async function readOrCreateReplicaId(gitDir: string): Promise<string> {
+export async function readOrCreateReplicaId(
+  fs: PromiseFsClient,
+  gitDir: string,
+): Promise<string> {
   const dir = join(gitDir, STATE_DIR)
   const file = join(dir, REPLICA_FILE)
 
-  const existing = await readId(file)
+  const existing = await readId(fs, file)
   if (existing) return existing
 
-  await mkdir(dir, { recursive: true })
+  await ensureDir(fs, dir)
   const id = randomUUID()
   try {
-    await writeFile(file, `${id}\n`, { flag: 'wx' })
+    // Exclusive create so concurrent fresh onboards converge on the first
+    // writer's id (node:fs honours `wx`; minimal mobile backends ignore the
+    // flag, but a single-process device has no race to lose).
+    await fs.promises.writeFile(file, `${id}\n`, { flag: 'wx' })
     return id
   } catch {
     // Lost the create race — converge on whoever won.
-    return (await readId(file)) ?? id
+    return (await readId(fs, file)) ?? id
   }
 }
 

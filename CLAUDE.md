@@ -216,9 +216,33 @@ packages/
         assertions (restore-checkpoint, multi-device ingest); persist the
         workIndex across reloads (today it cold-primes once per session on the
         first touch/rescan); diff context capping for very large files.
-- [ ] **Phase 4 — Mobile (Android).** IndexedDB `ObjectStore`; Buffer polyfill
-  via tsdown inject; the spike (isomorphic-git + IndexedDB round-trip); drop
-  `isDesktopOnly`; sideload + Syncthing round-trip across the user's devices.
+- [~] **Phase 4 — Mobile (Android).** _Storage spike ✅ — the core unknown is
+  de-risked in Node._
+  - [x] **IndexedDB object-store spike** (`test/indexeddb-store.spike.test.ts`):
+        the engine runs end-to-end with its **gitdir on IndexedDB** (LightningFS
+        + `fake-indexeddb`) and the worktree on `node:fs`, composed by
+        `createRoutingFs` — the exact mobile split. Proves onboard→edit→bless and
+        a blob byte round-trip (revert reads bytes back out of the IDB baseline).
+        Two real portability bugs the spike surfaced, now fixed:
+        - **`mkdir({recursive})` is a node-ism** LightningFS doesn't honour
+          (throws `EEXIST`, no parent creation). Added `fs-utils.ts`
+          `ensureDir` (tolerant mkdirp over the minimal fs contract) and routed
+          every injected-fs mkdir through it (`engine.ts` ×4, `local-state.ts`,
+          `signal-store.ts`).
+        - **`replica-id.ts` used static `node:fs/promises`** (one of the two
+          flagged transitive leaks) → now takes the injected `fs`
+          (`readOrCreateReplicaId(fs, gitDir)`; engine passes `this.fs`).
+  - [ ] **Buffer polyfill** via tsdown inject (isomorphic-git needs `Buffer`,
+        absent in the mobile WKWebView; keep `buffer` bundled, set `window.Buffer`).
+  - [ ] **Real mobile backends behind the router:** worktree→`app.vault.adapter`
+        (as `fs.promises`), gitdir→LightningFS (live IndexedDB, not faked); wire
+        the plugin to build them per-platform; drop `platform:'node'`/
+        `isDesktopOnly`.
+  - [ ] **Remaining node:fs leak:** `state.ts` still imports `node:fs/promises`
+        (legacy `bless-hwm`/`snapshot-seq`); convert or trim with the old
+        machinery. `node:crypto` (`randomUUID`/`createHash` in `replica-id.ts`)
+        also needs a mobile-safe path (Web Crypto) before Android.
+  - [ ] Sideload + Syncthing round-trip across the user's devices.
 - [ ] **Phase 5 — Polish.** Peer/sync UX, packaging (later;
   community store is low priority).
 
@@ -228,31 +252,35 @@ packages/
 (install deps there: `pnpm install`). Phase G ✅ + Phase-1 `fs`-injection ✅ +
 **Phase-2 coordination core ✅** + **Phase-3 plugin integration ✅** (real-data
 panel + **event-driven incremental hashing**, wired + live) + **composite routing
-`fs` ✅** (Phase-1 close-out). Gates: `pnpm -r test` = **90** (63 engine / 9 cli /
-18 plugin), `pnpm -r typecheck`, `pnpm knip`, engine + plugin `pnpm build`, and
-`pnpm test:plugin` (live headless smoke) all pass. `pnpm lint` has 2 pre-existing
-errors in `review-view.ts` (see "Latest increment" below) — not from this work.
+`fs` ✅** (Phase-1 close-out) + **mobile storage spike ✅** (gitdir on IndexedDB
+via the router). Gates: `pnpm -r test` = **92** (65 engine / 9 cli / 18 plugin),
+`pnpm -r typecheck`, `pnpm lint` (1 pre-existing warning only), `pnpm knip`,
+engine + plugin `pnpm build`, and `pnpm test:plugin` (live headless smoke) all
+pass.
 
-**Latest increment:** the **composite routing `fs`** (`createRoutingFs`,
-`packages/engine/src/routing-fs.ts` + `test/routing-fs.test.ts`) is built, tested,
-and exported — the Phase-1 open item is now done. Suite: **90** (63 engine / 9
-cli / 18 plugin). _Caveat:_ `pnpm lint` has **2 pre-existing errors** in
-`packages/plugin/src/review-view.ts:405-407` ("function should not return a value
-because its return type is void", in the binary-diff branch) — unrelated to the
-routing fs; trivially fixable (`return ctx(...)` → `{ ctx(...); return }`).
+**Latest increments (this session):**
+1. **Composite routing `fs`** (`createRoutingFs`, `routing-fs.ts` +
+   `test/routing-fs.test.ts`) — Phase-1 close-out; exported.
+2. **Plugin builds its engine via `createRoutingFs`** (`main.ts`; desktop = both
+   `node:fs`, behaviour-neutral — live `pnpm test:plugin` still passes).
+3. **Mobile storage spike ✅** (`test/indexeddb-store.spike.test.ts`) — engine
+   runs with the gitdir on IndexedDB (LightningFS + `fake-indexeddb`), worktree
+   on `node:fs`, via the router; onboard→bless + blob round-trip proven. Fixed
+   two portability bugs it surfaced: `fs-utils.ts` `ensureDir` (mkdirp; LightningFS
+   ignores `{recursive}`) and `readOrCreateReplicaId(fs, …)` (was static node:fs).
+   New engine devDeps: `@isomorphic-git/lightning-fs`, `fake-indexeddb`.
 
-**Next step — choose:**
-1. _Recommended:_ **Phase 4 — Mobile (Android).** Incremental hashing + the
-   composite routing `fs` (both prerequisites) are done, so the engine is ready
-   for the mobile `ObjectStore`. Remaining: build the two mobile backends behind
-   the router — worktree→`app.vault.adapter` (as `fs.promises`),
-   gitdir→isomorphic-git over IndexedDB (LightningFS) with the **Buffer polyfill
-   via tsdown inject** — wire the plugin to construct the engine via
-   `createRoutingFs` (desktop: both `node:fs`; a behaviour-neutral seam swap),
-   spike the isomorphic-git+IndexedDB round-trip, drop `isDesktopOnly`, then a
-   real Syncthing round-trip across the user's devices. See plan §Storage model.
-   Smaller follow-ups if preferred: persist the `workIndex` across reloads; fix
-   the pre-existing lint errors above.
+Suite: **92** (65 engine / 9 cli / 18 plugin); typecheck/lint/knip/builds green
+(lint has 1 pre-existing *warning* only).
+
+**Next step — Phase 4 continues (see the Phase-4 checklist above):**
+1. **Buffer polyfill** via tsdown inject (mobile WKWebView lacks `Buffer`).
+2. **Real mobile backends behind the router** (worktree→`app.vault.adapter`,
+   gitdir→live LightningFS), per-platform wiring in `main.ts`, drop
+   `platform:'node'`/`isDesktopOnly`.
+3. Close the last **node:fs leak** (`state.ts`) + a mobile-safe `node:crypto`
+   path in `replica-id.ts` (Web Crypto) before Android.
+Smaller follow-ups: persist the `workIndex` across reloads.
 2. Or **trim old machinery** now that the new path exists and is the product:
    `review-note.ts`, `changes-file.ts`, the engine's `snapshot`/`writeSnapshot`/
    `blessSnapshot`, the rotating-file bits of `replica-id.ts`, and `state.ts`'s
@@ -280,9 +308,12 @@ the overlay workaround (`pnpm shot:stub`; see memory
   a bless *obligation* (`stillPending`) lives in `LocalState.pending`. A gated
   bless can leave status clean while the obligation persists (see the
   arrival-gate test).
-- Engine still pulls `node:fs` transitively via `replica-id.ts`/`state.ts`
-  (`node:fs/promises`) — not yet 100% mobile-clean; `local-state.ts`/
-  `signal-store.ts` correctly use the injected `fs`. `node:path` swap pending.
+- Engine is nearly mobile-clean on fs: `engine.ts`/`local-state.ts`/
+  `signal-store.ts`/`replica-id.ts` all use the injected `fs` (via `ensureDir`
+  for mkdirp). **Remaining static `node:fs/promises`: `state.ts`** (legacy
+  `bless-hwm`/`snapshot-seq`). `node:path` is import-only (pure string ops, fine
+  in WKWebView); `node:crypto` in `replica-id.ts` still needs a Web Crypto path
+  for Android. Don't assume `{recursive:true}` mkdir anywhere — use `ensureDir`.
 - Test the plugin only in the headless container, never the real vault.
 
 ## Locked decisions

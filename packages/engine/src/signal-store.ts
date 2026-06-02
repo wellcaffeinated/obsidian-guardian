@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { PromiseFsClient } from 'isomorphic-git'
+import { ensureDir } from './fs-utils'
 import type { BlessRecord, ClientId, DeviceState } from './types'
 
 /**
@@ -28,7 +29,7 @@ async function writeJson(
   name: string,
   value: unknown,
 ): Promise<void> {
-  await fs.promises.mkdir(syncDir, { recursive: true })
+  await ensureDir(fs, syncDir)
   await fs.promises.writeFile(
     join(syncDir, name),
     `${JSON.stringify(value, null, 2)}\n`,
