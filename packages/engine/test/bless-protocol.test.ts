@@ -1,3 +1,4 @@
+import * as nodeFs from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -43,6 +44,7 @@ async function freshEngine(
     await write(vault, rel, content)
   }
   const engine = new ReviewEngine({
+    fs: nodeFs,
     vaultPath: vault,
     gitDir: gitdir,
     ...config,
@@ -146,7 +148,11 @@ describe('blessSnapshot — monotonic seq protocol', () => {
     const { engine, vault, gitdir } = await freshEngine({ 'note.md': 'v0\n' })
     const s = await snap(engine, vault, 'v1\n')
     expect(await engine.blessSnapshot(s.snapshot, s.seq)).toBe(true)
-    const reopened = new ReviewEngine({ vaultPath: vault, gitDir: gitdir })
+    const reopened = new ReviewEngine({
+      fs: nodeFs,
+      vaultPath: vault,
+      gitDir: gitdir,
+    })
     await reopened.onboard()
     expect(await reopened.blessSnapshot(s.snapshot, s.seq)).toBe(false)
   })

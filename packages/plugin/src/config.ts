@@ -33,8 +33,13 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   authorEmail: '',
 }
 
-/** A resolved {@link EngineConfig} with `reviewFolder` always set. */
-export interface ResolvedConfig extends EngineConfig {
+/**
+ * A resolved {@link EngineConfig} (paths + settings) with `reviewFolder` always
+ * set. `fs` is injected separately by the adapter at engine construction
+ * (`new ReviewEngine({ ...resolved, fs })`) — desktop Node fs, or a mobile
+ * vault-adapter/IndexedDB shim — so it is not resolved here.
+ */
+export interface ResolvedConfig extends Omit<EngineConfig, 'fs'> {
   reviewFolder: string
 }
 

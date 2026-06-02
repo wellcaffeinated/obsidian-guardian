@@ -1,3 +1,4 @@
+import * as nodeFs from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { EngineConfig } from '@obsidian-guardian/engine'
 
@@ -61,5 +62,13 @@ export function resolveConfig(
   )
   assertOutsideVault(vaultPath, gitDir)
   const replicaId = input.replicaId ?? env.OG_REPLICA_ID
-  return { vaultPath, gitDir, reviewFolder, ignore: input.ignore, replicaId }
+  // Desktop/CLI runs on Node, so inject Node's fs as the engine's PromiseFsClient.
+  return {
+    fs: nodeFs,
+    vaultPath,
+    gitDir,
+    reviewFolder,
+    ignore: input.ignore,
+    replicaId,
+  }
 }

@@ -1,14 +1,17 @@
-import * as fs from 'node:fs'
 import { join } from 'node:path'
-import git, { TREE, WORKDIR } from 'isomorphic-git'
+import git, { type PromiseFsClient, TREE, WORKDIR } from 'isomorphic-git'
 import type { Author } from './types'
 
 /**
- * The minimal context every low-level git operation needs: the work-tree
- * (`dir` = the vault) and the external git database (`gitdir`, outside the
- * synced tree). `ref` is the baseline marker branch.
+ * The minimal context every low-level git operation needs: the injected
+ * filesystem (`fs`), the work-tree (`dir` = the vault), the external git
+ * database (`gitdir`, outside the synced tree), and the baseline marker branch
+ * (`ref`). `fs` is a `PromiseFsClient` so the engine never imports `node:fs`
+ * directly — desktop passes Node's `fs`, mobile passes a vault-adapter/IndexedDB
+ * shim.
  */
 export interface GitCtx {
+  fs: PromiseFsClient
   dir: string
   gitdir: string
   ref: string
@@ -27,7 +30,7 @@ export async function resolveRef(
   ref: string = ctx.ref,
 ): Promise<string | null> {
   try {
-    return await git.resolveRef({ fs, gitdir: ctx.gitdir, ref })
+    return await git.resolveRef({ fs: ctx.fs, gitdir: ctx.gitdir, ref })
   } catch {
     return null
   }
@@ -36,7 +39,7 @@ export async function resolveRef(
 /** Initialise a repo with the marker as the default branch (idempotent). */
 export async function init(ctx: GitCtx): Promise<void> {
   await git.init({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     defaultBranch: ctx.ref,
@@ -64,7 +67,7 @@ export async function walkChanges(
   // Collect via a side-effect accumulator rather than git.walk's reduced
   // return value, which is not a reliable flat list across versions.
   await git.walk({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     trees: marker ? [TREE({ ref: ctx.ref }), WORKDIR()] : [WORKDIR()],
@@ -79,7 +82,9 @@ export async function walkChanges(
       const headOid = head ? ((await head.oid()) ?? null) : null
       let workdirOid: string | null = null
       if (workdir) {
-        const bytes = await fs.promises.readFile(join(ctx.dir, filepath))
+        const bytes = (await ctx.fs.promises.readFile(
+          join(ctx.dir, filepath),
+        )) as Uint8Array
         workdirOid = await hashBytes(bytes)
       }
       if (headOid !== workdirOid) {
@@ -100,7 +105,7 @@ export async function readMarkerBlob(
   if (!commit) return null
   try {
     const { blob, oid } = await git.readBlob({
-      fs,
+      fs: ctx.fs,
       gitdir: ctx.gitdir,
       oid: commit,
       filepath,
@@ -113,13 +118,13 @@ export async function readMarkerBlob(
 
 /** Stage a path (add/update its blob and index entry). */
 export async function add(ctx: GitCtx, filepath: string): Promise<void> {
-  await git.add({ fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
+  await git.add({ fs: ctx.fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
 }
 
 /** Unstage/remove a path from the index. Safe if the path is untracked. */
 export async function remove(ctx: GitCtx, filepath: string): Promise<void> {
   try {
-    await git.remove({ fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
+    await git.remove({ fs: ctx.fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
   } catch {
     // path was never tracked — nothing to remove
   }
@@ -132,7 +137,7 @@ export async function commit(
   message: string,
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
@@ -153,7 +158,13 @@ export async function writeRef(
   ref: string,
   oid: string,
 ): Promise<void> {
-  await git.writeRef({ fs, gitdir: ctx.gitdir, ref, value: oid, force: true })
+  await git.writeRef({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    ref,
+    value: oid,
+    force: true,
+  })
 }
 
 /**
@@ -169,7 +180,7 @@ export async function commitIndex(
   parent: string[],
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
@@ -193,7 +204,7 @@ export async function commitTree(
   parent: string[],
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
@@ -205,7 +216,11 @@ export async function commitTree(
 
 /** The tree oid recorded by a commit. */
 export async function readTreeOid(ctx: GitCtx, oid: string): Promise<string> {
-  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  const { commit } = await git.readCommit({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    oid,
+  })
   return commit.tree
 }
 
@@ -214,6 +229,10 @@ export async function readCommitTime(
   ctx: GitCtx,
   oid: string,
 ): Promise<string> {
-  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  const { commit } = await git.readCommit({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    oid,
+  })
   return new Date(commit.committer.timestamp * 1000).toISOString()
 }

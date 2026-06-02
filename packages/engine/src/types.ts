@@ -1,3 +1,5 @@
+import type { PromiseFsClient } from 'isomorphic-git'
+
 /**
  * The kind of change a file underwent relative to the baseline marker.
  */
@@ -69,6 +71,14 @@ export interface Author {
  * Configuration for a single-vault {@link ReviewEngine}.
  */
 export interface EngineConfig {
+  /**
+   * Injected filesystem (isomorphic-git's `PromiseFsClient` — any object with a
+   * `.promises` API: readFile/writeFile/mkdir/unlink/readdir/stat/lstat/rmdir).
+   * Node's `fs` satisfies it (desktop/CLI); on mobile a vault-adapter +
+   * IndexedDB shim is provided. Required so the engine carries no static
+   * `node:fs` import and can run on Obsidian mobile.
+   */
+  fs: PromiseFsClient
   /** Absolute path to the vault folder (the git work-tree). */
   vaultPath: string
   /** Absolute path to the git database, OUTSIDE the synced tree (app-data). */

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import * as nodeFs from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -41,6 +41,7 @@ async function freshEngine(
     await write(vault, rel, content)
   }
   const engine = new ReviewEngine({
+    fs: nodeFs,
     vaultPath: vault,
     gitDir: gitdir,
     ...config,
@@ -64,6 +65,7 @@ describe('onboard', () => {
     const vault = join(root, 'vault')
     await write(vault, 'note.md', 'hi\n')
     const engine = new ReviewEngine({
+      fs: nodeFs,
       vaultPath: vault,
       gitDir: join(root, 'gitdb'),
     })
@@ -77,6 +79,7 @@ describe('onboard', () => {
     const vault = join(root, 'vault')
     await write(vault, 'note.md', 'hi\n')
     const engine = new ReviewEngine({
+      fs: nodeFs,
       vaultPath: vault,
       gitDir: join(root, 'gitdb'),
     })
@@ -162,7 +165,7 @@ describe('revert', () => {
     const { engine, vault } = await freshEngine({ 'note.md': 'x\n' })
     await write(vault, 'added.md', 'junk\n')
     await engine.revert('added.md')
-    expect(existsSync(join(vault, 'added.md'))).toBe(false)
+    expect(nodeFs.existsSync(join(vault, 'added.md'))).toBe(false)
     expect((await engine.status()).clean).toBe(true)
   })
 })
@@ -179,7 +182,7 @@ describe('rollback', () => {
     await engine.rollback()
     expect(await readFile(join(vault, 'a.md'), 'utf8')).toBe('A\n')
     expect(await readFile(join(vault, 'b.md'), 'utf8')).toBe('B\n')
-    expect(existsSync(join(vault, 'c.md'))).toBe(false)
+    expect(nodeFs.existsSync(join(vault, 'c.md'))).toBe(false)
     expect((await engine.status()).clean).toBe(true)
   })
 })
@@ -188,7 +191,9 @@ describe('tag', () => {
   it('writes a tag ref at the marker', async () => {
     const { engine, gitdir } = await freshEngine({ 'note.md': 'hi\n' })
     await engine.tag('before-bulk')
-    expect(existsSync(join(gitdir, 'refs', 'tags', 'before-bulk'))).toBe(true)
+    expect(nodeFs.existsSync(join(gitdir, 'refs', 'tags', 'before-bulk'))).toBe(
+      true,
+    )
   })
 })
 
@@ -231,14 +236,18 @@ describe('replica id', () => {
     const { engine, vault, gitdir } = await freshEngine({ 'n.md': 'x\n' })
     const first = engine.reviewNoteName
     // a second engine over the same gitDir reuses the persisted id
-    const again = new ReviewEngine({ vaultPath: vault, gitDir: gitdir })
+    const again = new ReviewEngine({
+      fs: nodeFs,
+      vaultPath: vault,
+      gitDir: gitdir,
+    })
     await again.onboard()
     expect(again.reviewNoteName).toBe(first)
     // the id lives in the gitDir (never the vault), so git ops can't see it
-    expect(existsSync(join(gitdir, 'obsidian-guardian', 'replica-id'))).toBe(
-      true,
-    )
-    expect(existsSync(join(vault, 'obsidian-guardian'))).toBe(false)
+    expect(
+      nodeFs.existsSync(join(gitdir, 'obsidian-guardian', 'replica-id')),
+    ).toBe(true)
+    expect(nodeFs.existsSync(join(vault, 'obsidian-guardian'))).toBe(false)
   })
 
   it('differs across replicas (different gitDirs)', async () => {

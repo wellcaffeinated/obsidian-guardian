@@ -1,6 +1,6 @@
-import * as fs from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import ignore, { type Ignore } from 'ignore'
+import type { PromiseFsClient } from 'isomorphic-git'
 import { renderChangesFile } from './changes-file'
 import {
   DEFAULT_AUTHOR,
@@ -75,6 +75,7 @@ function upsertManagedBlock(existing: string, lines: string[]): string {
  * `fs` and isomorphic-git only (never Obsidian).
  */
 export class ReviewEngine {
+  private readonly fs: PromiseFsClient
   private readonly vaultPath: string
   private readonly gitDir: string
   private readonly reviewFolder: string
@@ -87,6 +88,7 @@ export class ReviewEngine {
   private resolvedReviewNoteName: string | undefined
 
   constructor(config: EngineConfig) {
+    this.fs = config.fs
     this.vaultPath = config.vaultPath
     this.gitDir = config.gitDir
     this.reviewFolder = config.reviewFolder ?? DEFAULT_REVIEW_FOLDER
@@ -102,7 +104,12 @@ export class ReviewEngine {
   }
 
   private get ctx(): GitCtx {
-    return { dir: this.vaultPath, gitdir: this.gitDir, ref: this.markerRef }
+    return {
+      fs: this.fs,
+      dir: this.vaultPath,
+      gitdir: this.gitDir,
+      ref: this.markerRef,
+    }
   }
 
   private get vaultName(): string {
@@ -165,12 +172,12 @@ export class ReviewEngine {
   async onboard(): Promise<boolean> {
     const existing = await resolveRef(this.ctx)
     if (existing) {
-      this.seedExclude()
+      await this.seedExclude()
       await this.ensureReviewNoteName()
       return false
     }
     await init(this.ctx)
-    this.seedExclude()
+    await this.seedExclude()
     await this.ensureReviewNoteName()
     // Empty commit first so the marker resolves, then capture current state.
     await commit(this.ctx, this.author, 'chore: initialize baseline')
@@ -204,9 +211,12 @@ export class ReviewEngine {
   async refresh(): Promise<Status> {
     const status = await this.status()
     const dir = join(this.vaultPath, this.reviewFolder)
-    fs.mkdirSync(dir, { recursive: true })
+    await this.fs.promises.mkdir(dir, { recursive: true })
     const name = await this.ensureReviewNoteName()
-    fs.writeFileSync(join(dir, name), renderReviewNote(status, this.vaultName))
+    await this.fs.promises.writeFile(
+      join(dir, name),
+      renderReviewNote(status, this.vaultName),
+    )
     return status
   }
 
@@ -315,8 +325,8 @@ export class ReviewEngine {
     )
     const content = renderChangesFile(status, this.vaultName)
     const dir = join(this.vaultPath, this.reviewFolder)
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(join(dir, fileName), content)
+    await this.fs.promises.mkdir(dir, { recursive: true })
+    await this.fs.promises.writeFile(join(dir, fileName), content)
     return { status, fileName, content }
   }
 
@@ -353,26 +363,40 @@ export class ReviewEngine {
     const abs = join(this.vaultPath, path)
     const blob = await readMarkerBlob(this.ctx, path)
     if (blob) {
-      await fs.promises.mkdir(dirname(abs), { recursive: true })
-      await fs.promises.writeFile(abs, blob.blob)
+      await this.fs.promises.mkdir(dirname(abs), { recursive: true })
+      await this.fs.promises.writeFile(abs, blob.blob)
       await add(this.ctx, path)
     } else {
-      await fs.promises.rm(abs, { force: true })
+      try {
+        await this.fs.promises.unlink(abs)
+      } catch {
+        // already absent — nothing to remove from the work-tree
+      }
       await remove(this.ctx, path)
     }
   }
 
-  private seedExclude(): void {
+  private async seedExclude(): Promise<void> {
     const infoDir = join(this.gitDir, 'info')
-    fs.mkdirSync(infoDir, { recursive: true })
+    await this.fs.promises.mkdir(infoDir, { recursive: true })
     const file = join(infoDir, 'exclude')
-    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
-    fs.writeFileSync(file, upsertManagedBlock(existing, this.ignoreGlobs))
+    let existing = ''
+    try {
+      existing = (await this.fs.promises.readFile(file, 'utf8')) as string
+    } catch {
+      existing = ''
+    }
+    await this.fs.promises.writeFile(
+      file,
+      upsertManagedBlock(existing, this.ignoreGlobs),
+    )
   }
 
   private async readWorkdir(path: string): Promise<Uint8Array | null> {
     try {
-      return await fs.promises.readFile(join(this.vaultPath, path))
+      return (await this.fs.promises.readFile(
+        join(this.vaultPath, path),
+      )) as Uint8Array
     } catch {
       return null
     }
