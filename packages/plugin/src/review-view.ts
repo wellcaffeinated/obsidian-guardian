@@ -6,10 +6,27 @@ import {
   setIcon,
   type WorkspaceLeaf,
 } from 'obsidian'
-import type { CheckpointRow, FileRow, PanelData } from './format'
+import type { FileRow, PanelData } from './format'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
+
+/** Collapse-state / file-row key for the single baseline entry in the timeline. */
+const BASELINE_KEY = '__baseline__'
+
+/**
+ * A unified History timeline entry: either a device-local checkpoint or the
+ * baseline marker. `changes` is the diff to the *current* working tree (what
+ * restoring this entry would change); empty means it equals the current state.
+ */
+interface HistoryEntry {
+  when: string | null
+  isBaseline: boolean
+  /** Restore target: the checkpoint commit oid (unused for the baseline). */
+  oid: string
+  shortHash: string
+  changes: FileRow[]
+}
 
 /** Build stamp inlined by tsdown's `define` (`build-YYYYMMDD-HHMM`); falls back
  * to `dev` when running un-bundled (tests, where the global is undefined). */
@@ -174,6 +191,10 @@ export class ReviewView extends ItemView {
    * Render the History section: checkpoints and the baseline marker merged into
    * one timeline, newest first. A checkpoint whose content equals the baseline IS
    * the baseline, so it is collapsed into the baseline marker (not shown twice).
+   *
+   * Every entry shows the diff *relative to the current working tree* — what
+   * restoring it would change — and the most recent entry identical to the current
+   * tree is tagged "Live" (its Restore is disabled; there's nothing to restore).
    */
   private renderHistory(root: HTMLElement, data: PanelData): void {
     const { baseline } = data
@@ -185,20 +206,33 @@ export class ReviewView extends ItemView {
     root.createDiv({ cls: 'og-history-label', text: 'History' })
     const list = root.createDiv({ cls: 'og-timeline' })
 
-    const items: { when: string | null; render: () => void }[] =
-      checkpoints.map((cp) => ({
-        when: cp.when,
-        render: () => this.renderCheckpoint(list, cp),
-      }))
+    const entries: HistoryEntry[] = checkpoints.map((cp) => ({
+      when: cp.when,
+      isBaseline: false,
+      oid: cp.oid,
+      shortHash: cp.shortHash,
+      // cp.changes is the checkpoint → working-tree diff (what restoring it does).
+      changes: cp.changes,
+    }))
     if (baseline) {
-      items.push({
+      entries.push({
         when: baseline.when,
-        render: () => this.renderBaseline(list, baseline),
+        isBaseline: true,
+        oid: baseline.shortHash,
+        shortHash: baseline.shortHash,
+        // Restoring the baseline discards the pending changes, i.e. `current`.
+        changes: data.current,
       })
     }
     // Newest first; ISO-8601 UTC strings sort lexicographically.
-    items.sort((a, b) => (b.when ?? '').localeCompare(a.when ?? ''))
-    for (const item of items) item.render()
+    entries.sort((a, b) => (b.when ?? '').localeCompare(a.when ?? ''))
+
+    // "Live" = the most recent entry whose content equals the working tree (empty
+    // restore diff). Only one entry is tagged, so a stale older twin stays plain.
+    const liveIdx = entries.findIndex((e) => e.changes.length === 0)
+    for (const [i, entry] of entries.entries()) {
+      this.renderEntry(list, entry, /* live */ i === liveIdx)
+    }
   }
 
   private renderHeader(root: HTMLElement, data: PanelData): void {
@@ -311,85 +345,90 @@ export class ReviewView extends ItemView {
     new ConfirmModal(this.app, opts).open()
   }
 
-  // --- checkpoint: frozen snapshot, collapsible -----------------------------
+  // --- history entry: a checkpoint OR the baseline marker, collapsible -------
 
-  private renderCheckpoint(parent: HTMLElement, cp: CheckpointRow): void {
-    const isOpen = this.openCheckpoints.has(cp.oid)
-    const card = parent.createDiv({ cls: 'og-entry og-entry--history' })
+  /**
+   * Render one timeline entry — a device-local checkpoint or the baseline marker.
+   * Both show the diff to the current working tree (what restoring would change)
+   * and a Restore action; the baseline restores via `rollback`, a checkpoint via
+   * `restoreCheckpoint`. The `live` entry (identical to current) shows no diff and
+   * a disabled Restore.
+   */
+  private renderEntry(
+    parent: HTMLElement,
+    entry: HistoryEntry,
+    live: boolean,
+  ): void {
+    const collapseKey = entry.isBaseline ? BASELINE_KEY : entry.oid
+    const isOpen = this.openCheckpoints.has(collapseKey)
+    const card = parent.createDiv({
+      cls: `og-entry ${entry.isBaseline ? 'og-entry--baseline' : 'og-entry--history'}`,
+    })
     const head = card.createDiv({ cls: 'og-entry__head' })
     setIcon(
       head.createSpan({ cls: 'og-entry__caret' }),
       isOpen ? 'chevron-down' : 'chevron-right',
     )
-    this.renderTitle(head, 'Checkpoint', 'checkpoint', formatWhen(cp.when))
-    head.createSpan({ cls: 'og-entry__hash', text: cp.shortHash })
-    head.addEventListener('click', () => this.toggle(cp.oid))
+    this.renderTitle(
+      head,
+      entry.isBaseline ? 'Baseline' : 'Checkpoint',
+      entry.isBaseline ? 'baseline' : 'checkpoint',
+      formatWhen(entry.when),
+    )
+    if (live) head.createSpan({ cls: 'og-badge og-badge--live', text: 'LIVE' })
+    head.createSpan({ cls: 'og-entry__hash', text: entry.shortHash })
+    head.addEventListener('click', () => this.toggle(collapseKey))
     if (!isOpen) return
 
     const body = card.createDiv({ cls: 'og-entry__body' })
-    if (cp.changes.length === 0) {
+    if (entry.changes.length === 0) {
       body.createDiv({
         cls: 'og-compare',
-        text: 'No changes since this checkpoint — identical to current.',
+        text: 'Identical to the current state — nothing to restore.',
       })
-      return
+    } else {
+      this.renderCompare(
+        body,
+        `${entry.shortHash}..current`,
+        'Restore reverts these files',
+      )
+      // Checkpoints diff from their own commit; the baseline diffs from the marker
+      // (default fromRef = undefined). Key file rows distinctly so diffs don't mix.
+      const fromRef = entry.isBaseline ? undefined : entry.oid
+      const fromRefKey = entry.isBaseline ? BASELINE_KEY : entry.oid
+      for (const change of entry.changes) {
+        this.renderFileRow(body, change, fromRefKey, fromRef, false)
+      }
     }
-    this.renderCompare(
-      body,
-      `${cp.shortHash}..current`,
-      'Restore reverts these files',
-    )
-    for (const change of cp.changes) {
-      this.renderFileRow(body, change, cp.oid, cp.oid, false)
-    }
+
     const actions = body.createDiv({ cls: 'og-entry__actions' })
     this.button(
       actions,
       'rotate-ccw',
-      'Restore this checkpoint',
-      () => {
-        this.confirm({
-          title: 'Restore this checkpoint?',
-          body: `The working tree is overwritten with checkpoint ${cp.shortHash}. Changes made since it are lost (the baseline is unchanged).`,
-          confirmText: 'Restore',
-          onConfirm: () => void this.controller.restoreCheckpoint(cp.oid),
-        })
-      },
+      entry.isBaseline ? 'Restore baseline' : 'Restore this checkpoint',
+      () => this.confirmRestore(entry),
       'warn',
+      /* disabled */ live,
     )
   }
 
-  // --- baseline: static card (like a checkpoint) with a Restore action ------
-
-  private renderBaseline(
-    parent: HTMLElement,
-    baseline: NonNullable<PanelData['baseline']>,
-  ): void {
-    const card = parent.createDiv({ cls: 'og-entry og-entry--baseline' })
-    const head = card.createDiv({
-      cls: 'og-entry__head og-entry__head--static',
-    })
-    this.renderTitle(head, 'Baseline', 'baseline', formatWhen(baseline.when))
-    head.createSpan({ cls: 'og-entry__hash', text: baseline.shortHash })
-
-    const body = card.createDiv({ cls: 'og-entry__body' })
-    const actions = body.createDiv({ cls: 'og-entry__actions' })
-    // Restore = roll the working tree back to the baseline — same action as the
-    // current card's "Undo these changes", so share its confirm dialog.
-    this.button(
-      actions,
-      'rotate-ccw',
-      'Restore',
-      () => {
-        this.confirm({
-          title: 'Discard all pending changes?',
-          body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
-          confirmText: 'Discard changes',
-          onConfirm: () => void this.controller.rollback(),
-        })
-      },
-      'warn',
-    )
+  /** Open the confirm dialog for restoring a history entry (baseline or checkpoint). */
+  private confirmRestore(entry: HistoryEntry): void {
+    if (entry.isBaseline) {
+      this.confirm({
+        title: 'Discard all pending changes?',
+        body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
+        confirmText: 'Discard changes',
+        onConfirm: () => void this.controller.rollback(),
+      })
+    } else {
+      this.confirm({
+        title: 'Restore this checkpoint?',
+        body: `The working tree is overwritten with checkpoint ${entry.shortHash}. Changes made since it are lost (the baseline is unchanged).`,
+        confirmText: 'Restore',
+        onConfirm: () => void this.controller.restoreCheckpoint(entry.oid),
+      })
+    }
   }
 
   // --- shared bits ----------------------------------------------------------
@@ -562,13 +601,19 @@ export class ReviewView extends ItemView {
     label: string,
     onClick?: () => void,
     variant?: 'cta' | 'warn',
+    disabled = false,
   ): void {
     const btn = parent.createEl('button', {
       cls: `og-btn${variant ? ` og-btn--${variant}` : ''}`,
     })
     setIcon(btn.createSpan({ cls: 'og-btn__icon' }), icon)
     btn.createSpan({ text: label })
-    if (onClick) btn.addEventListener('click', onClick)
+    if (disabled) {
+      btn.disabled = true
+      btn.addClass('og-btn--disabled')
+    } else if (onClick) {
+      btn.addEventListener('click', onClick)
+    }
   }
 }
 

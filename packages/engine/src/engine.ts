@@ -14,7 +14,7 @@ import { ensureDir } from './fs-utils'
 import {
   add,
   commit,
-  commitIndex,
+  commitDetachedTree,
   commitTree,
   type FlatEntry,
   type GitCtx,
@@ -285,20 +285,9 @@ export class ReviewEngine {
       manifest,
       blessedAt: new Date().toISOString(),
     }
-    const baselineBefore = await resolveRef(this.ctx)
+    // applyBless advances our baseline and preserves the previous baseline as a
+    // restorable checkpoint (so a bless can be undone to the prior blessed state).
     await this.applyBless(rec)
-    // Preserve the pre-bless baseline as a restorable checkpoint, so a bless can
-    // be undone (rolled back to the previous blessed state) — including the very
-    // first baseline. Only when the baseline actually advanced.
-    const baselineAfter = await resolveRef(this.ctx)
-    if (baselineBefore && baselineAfter && baselineBefore !== baselineAfter) {
-      const seq = await nextSeq(this.fs, this.gitDir)
-      await writeRef(
-        this.ctx,
-        `refs/og/checkpoints/${pad(seq)}`,
-        baselineBefore,
-      )
-    }
     // The manifest came from the authoritative full walk; drop the incremental
     // index so the next read re-primes from disk (no phantom diff if an edit
     // event was ever missed). bless is user-initiated and rare — one rescan is fine.
@@ -373,6 +362,18 @@ export class ReviewEngine {
         newTree,
         baselineCommit ? [baselineCommit] : [],
       )
+      // Preserve the pre-bless baseline as a restorable checkpoint so the bless
+      // can be undone — on the device that blessed AND on every device that later
+      // applies it via ingest()/recover(). Only when an existing baseline moved
+      // (the first-ever baseline has no predecessor to keep).
+      if (baselineCommit) {
+        const seq = await nextSeq(this.fs, this.gitDir)
+        await writeRef(
+          this.ctx,
+          `refs/og/checkpoints/${pad(seq)}`,
+          baselineCommit,
+        )
+      }
     }
     return { changed, stillPending }
   }
@@ -478,14 +479,37 @@ export class ReviewEngine {
         created: false,
       }
     }
+    // Build the working tree's tree content-addressed (baseline ⊕ pending), so the
+    // checkpoint's tree is byte-exact with the working tree. The git index is NOT
+    // used: a prior bless advances the baseline via commitTree without updating the
+    // index, so committing the index could capture a stale tree (the cause of the
+    // "diff shows changes right after checkpointing" bug).
+    const entries = baseline
+      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, baseline))
+      : new Map<string, FlatEntry>()
     for (const change of changes) {
-      if (change.workdirOid === null) await remove(this.ctx, change.path)
-      else await add(this.ctx, change.path)
+      if (change.workdirOid === null) {
+        entries.delete(change.path)
+        continue
+      }
+      const bytes = await this.readWorkdir(change.path)
+      if (bytes === null) continue
+      const oid = await writeBlob(this.ctx, bytes)
+      const prev = entries.get(change.path)
+      entries.set(change.path, { oid, mode: prev?.mode ?? '100644' })
     }
-    const oid = await commitIndex(
+    const tree = await writeFlatTree(this.ctx, entries)
+    // Dedup: never create a checkpoint identical to the most recent one (repeated
+    // clicks with no edits in between must not pile up duplicate snapshots).
+    const [latest] = await this.listCheckpoints()
+    if (latest && latest.tree === tree) {
+      return { oid: latest.oid, seq: latest.seq, created: false }
+    }
+    const oid = await commitDetachedTree(
       this.ctx,
       this.author,
       'checkpoint: snapshot',
+      tree,
       baseline ? [baseline] : [],
     )
     const seq = await nextSeq(this.fs, this.gitDir)

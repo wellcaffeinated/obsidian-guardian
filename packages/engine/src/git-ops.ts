@@ -327,15 +327,16 @@ export async function writeRef(
 }
 
 /**
- * Commit the current index as a commit with an explicit `parent`, **without**
- * advancing the baseline marker. Returns the new commit oid (so the caller can
- * point a side ref at it — e.g. a checkpoint). The tree is built from the index,
- * so callers must stage the working tree first.
+ * Commit a pre-existing `tree` oid with an explicit `parent` **without** advancing
+ * the baseline marker (`noUpdateBranch`). Used by checkpoint to pin a snapshot
+ * commit (pointed at by a side ref) whose tree is byte-exact with the working
+ * tree, without relying on — or disturbing — the git index. Returns the oid.
  */
-export async function commitIndex(
+export async function commitDetachedTree(
   ctx: GitCtx,
   author: Author,
   message: string,
+  tree: string,
   parent: string[],
 ): Promise<string> {
   return git.commit({
@@ -344,6 +345,7 @@ export async function commitIndex(
     gitdir: ctx.gitdir,
     message,
     author: { ...author, timestamp: Math.floor(Date.now() / 1000) },
+    tree,
     parent,
     ref: ctx.ref,
     noUpdateBranch: true,

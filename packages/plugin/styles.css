@@ -63,6 +63,15 @@
   background: var(--background-modifier-active-hover);
   transform: translateY(1px);
 }
+.og .og-btn.og-btn--disabled,
+.og .og-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.og .og-btn.og-btn--disabled:hover,
+.og .og-btn:disabled:hover {
+  background: var(--interactive-normal);
+}
 .og-btn__icon {
   display: flex;
 }
@@ -300,6 +309,12 @@
 .og-badge--rename {
   color: var(--color-blue);
   background: color-mix(in srgb, var(--color-blue) 15%, transparent);
+}
+/* "LIVE" tag on the timeline entry that equals the current working tree */
+.og-badge--live {
+  color: var(--color-green);
+  background: color-mix(in srgb, var(--color-green) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-green) 45%, transparent);
 }
 
 .og-file__path {

@@ -52,6 +52,27 @@ describe('listCheckpoints', () => {
     expect(await engine.listCheckpoints()).toEqual([])
   })
 
+  it('does not create a duplicate checkpoint when clicked again with no edits', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'two\n')
+    const first = await engine.checkpoint()
+    expect(first.created).toBe(true)
+    // No edits since → the working tree still equals the latest checkpoint.
+    const again = await engine.checkpoint()
+    expect(again.created).toBe(false)
+    expect(again.oid).toBe(first.oid)
+    expect(await engine.listCheckpoints()).toHaveLength(1)
+  })
+
+  it('a fresh checkpoint has an empty diff to the current working tree', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'two\n')
+    await engine.checkpoint()
+    const tl = await engine.timeline()
+    expect(tl.checkpoints).toHaveLength(1)
+    expect(tl.checkpoints[0]?.changes).toEqual([])
+  })
+
   it('lists created checkpoints newest seq first', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
     await write(vault, 'a.md', 'two\n')

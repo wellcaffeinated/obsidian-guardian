@@ -48,7 +48,7 @@ export interface FileRow {
 }
 
 /** A checkpoint plus its diff to the working tree, view-ready. */
-export interface CheckpointRow {
+interface CheckpointRow {
   /** Full checkpoint commit oid (the restore target). */
   oid: string
   /** Tree oid (content address) — lets the view recognise a checkpoint that

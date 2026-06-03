@@ -183,6 +183,22 @@ describe('applyBless — content gate', () => {
     expect((await b.engine.status()).clean).toBe(true)
   })
 
+  it('preserves the previous baseline as a checkpoint when a peer bless advances it', async () => {
+    const a = await device({ 'note.md': 'v0\n' })
+    const b = await device({ 'note.md': 'v0\n' })
+    await write(a.vault, 'note.md', 'v1\n')
+    const rec = await a.engine.bless()
+    await write(b.vault, 'note.md', 'v1\n')
+    expect(await b.engine.listCheckpoints()).toEqual([])
+    expect((await b.engine.applyBless(rec)).changed).toBe(true)
+    // The pre-bless baseline (v0) is kept as a checkpoint so the applied bless can
+    // be undone — the same affordance the blessing device gets.
+    const cps = await b.engine.listCheckpoints()
+    expect(cps).toHaveLength(1)
+    await b.engine.restoreCheckpoint(cps[0]?.oid ?? '')
+    expect(await readFile(join(b.vault, 'note.md'), 'utf8')).toBe('v0\n')
+  })
+
   it('converges: same working tree + same bless ⇒ same blessed state', async () => {
     const a = await device({ 'note.md': 'v0\n' })
     const b = await device({ 'note.md': 'v0\n' })
