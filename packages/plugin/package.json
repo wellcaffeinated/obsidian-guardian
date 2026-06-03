@@ -12,7 +12,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@obsidian-guardian/engine": "workspace:*"
+    "@obsidian-guardian/engine": "workspace:*",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

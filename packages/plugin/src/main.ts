@@ -7,6 +7,7 @@ import {
   syncDirPath,
   type Timeline,
 } from '@obsidian-guardian/engine'
+import { Buffer as BufferPolyfill } from 'buffer'
 import {
   FileSystemAdapter,
   Notice,
@@ -28,6 +29,13 @@ import {
 } from './review-view'
 import { GuardianSettingTab, type SettingsHost } from './settings'
 import { createDebouncer, type Debouncer, shouldIgnorePath } from './watcher'
+
+// isomorphic-git (and its safe-buffer dep) reference a `Buffer` global. Desktop's
+// Electron Node provides one; the mobile WKWebView does not, so the first git op
+// would throw `Buffer is not defined`. Install the bundled feross polyfill (the
+// `buffer` import is aliased to it in tsdown.config.ts) before any engine work.
+// `??=` leaves desktop's native Buffer untouched — this only fills the mobile gap.
+globalThis.Buffer ??= BufferPolyfill
 
 /** Debounce for re-hashing the timeline after vault edits. */
 const REFRESH_DEBOUNCE_MS = 600

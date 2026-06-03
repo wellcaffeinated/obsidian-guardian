@@ -79,6 +79,9 @@ importers:
       '@obsidian-guardian/engine':
         specifier: workspace:*
         version: link:../engine
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

@@ -248,8 +248,17 @@ packages/
         - **`replica-id.ts` used static `node:fs/promises`** (one of the two
           flagged transitive leaks) → now takes the injected `fs`
           (`readOrCreateReplicaId(fs, gitDir)`; engine passes `this.fs`).
-  - [ ] **Buffer polyfill** via tsdown inject (isomorphic-git needs `Buffer`,
-        absent in the mobile WKWebView; keep `buffer` bundled, set `window.Buffer`).
+  - [x] **Buffer polyfill** (isomorphic-git needs a `Buffer` global, absent in
+        the mobile WKWebView). Two consumers, two fixes (the bare-`'buffer'`
+        builtin name defeats a plain `inject`): tsdown **aliases `buffer` → the
+        feross `buffer/index.js`** so `safe-buffer`'s `require('buffer')` bundles
+        the polyfill instead of externalising to the missing Node builtin; and
+        `main.ts` does `globalThis.Buffer ??= <feross>` so iso-git's *free*
+        `Buffer` global is filled on mobile (a no-op on desktop's native Buffer).
+        `buffer` added to plugin deps (knip `ignoreDependencies` — it shadows the
+        builtin name). Desktop unaffected; the live smoke exercises the bundled
+        polyfill via `safe-buffer` during git-sha. On-device Android still
+        unverified (only the desktop container is available here).
   - [ ] **Real mobile backends behind the router:** worktree→`app.vault.adapter`
         (as `fs.promises`), gitdir→LightningFS (live IndexedDB, not faked); wire
         the plugin to build them per-platform; drop `platform:'node'`/
