@@ -413,7 +413,13 @@ export class ReviewEngine {
     }
     state.pending = [...retained.values()]
     await writeLocalState(this.fs, this.gitDir, state)
-    await this.publishDeviceState(state)
+    // Republish our DeviceState only when ingest actually advanced something —
+    // a peer bless applied (`changed`) or a newly observed peer seq (`fresh`).
+    // A no-op ingest must NOT write: `publishDeviceState` writes
+    // `device-<id>.json` *inside the synced vault*, so a host file-watcher picks
+    // it up and fires another ingest — an infinite republish loop (one rewrite
+    // every debounce interval, forever). Gating the write breaks that loop.
+    if (changed || fresh.length > 0) await this.publishDeviceState(state)
     return { changed }
   }
 

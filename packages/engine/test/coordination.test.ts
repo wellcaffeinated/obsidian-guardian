@@ -1,5 +1,14 @@
 import * as nodeFs from 'node:fs'
-import { cp, mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ReviewEngine } from '@obsidian-guardian/engine'
@@ -249,5 +258,29 @@ describe('ingest — synced signal files end to end', () => {
     expect((await reborn.status()).clean).toBe(true)
     await reborn.recover() // idempotent
     expect((await reborn.status()).clean).toBe(true)
+  })
+})
+
+describe('ingest — no-op does not republish (republish-loop guard)', () => {
+  it('leaves device-<id>.json untouched when nothing fresh arrived', async () => {
+    // publishDeviceState writes device-<id>.json *inside the synced vault*; a
+    // host file-watcher turns that write into another ingest. If a no-op ingest
+    // republished, that would loop forever. Assert it writes nothing.
+    const { engine, vault } = await device({ 'a.md': 'a0\n' })
+    await engine.bless() // legit publish: device-<id>.json + bless-<id>.json
+    const syncDir = join(vault, '_OG', 'sync')
+    const deviceFile = (await readdir(syncDir)).find((f) =>
+      /^device-.*\.json$/.test(f),
+    )
+    expect(deviceFile).toBeDefined()
+    const path = join(syncDir, deviceFile as string)
+    const before = JSON.parse(await readFile(path, 'utf8')).updatedAt
+    // A delay so a republish would produce a strictly different ISO timestamp.
+    await new Promise((r) => setTimeout(r, 5))
+
+    const { changed } = await engine.ingest() // no peers, nothing fresh
+    expect(changed).toBe(false)
+    const after = JSON.parse(await readFile(path, 'utf8')).updatedAt
+    expect(after).toBe(before) // not rewritten → no watcher retrigger → no loop
   })
 })
