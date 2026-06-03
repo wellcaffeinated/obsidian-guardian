@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 
 describe('lineStats', () => {
   it('counts added/removed lines precisely for normal-size text', () => {
-    expect(lineStats('a\nb\nc\n', 'a\nB\nc\n')).toEqual({ added: 1, removed: 1 })
+    expect(lineStats('a\nb\nc\n', 'a\nB\nc\n')).toEqual({
+      added: 1,
+      removed: 1,
+    })
     expect(lineStats('a\nb\n', 'a\nb\nc\n')).toEqual({ added: 1, removed: 0 })
     expect(lineStats('a\nb\nc\n', 'a\n')).toEqual({ added: 0, removed: 2 })
   })
