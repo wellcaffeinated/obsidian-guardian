@@ -8,7 +8,13 @@ import {
   DEFAULT_REVIEW_FOLDER,
   FRESHNESS_WINDOW_MS,
 } from './defaults'
-import { decode, isBinary, lineDiff, lineStats } from './diff-stats'
+import {
+  contextualDiff,
+  decode,
+  isBinary,
+  lineDiff,
+  lineStats,
+} from './diff-stats'
 import { ensureDir } from './fs-utils'
 import {
   add,
@@ -515,6 +521,7 @@ export class ReviewEngine {
     path: string,
     fromRef: string = this.markerRef,
     reverse = false,
+    context = 3,
   ): Promise<FileDiff> {
     const before = await readMarkerBlob(this.ctx, path, fromRef)
     const after = await this.readWorkdir(path)
@@ -524,10 +531,8 @@ export class ReviewEngine {
       return { binary: true, lines: [] }
     const ref = decode(refBytes)
     const work = decode(workBytes)
-    return {
-      binary: false,
-      lines: reverse ? lineDiff(work, ref) : lineDiff(ref, work),
-    }
+    const lines = reverse ? lineDiff(work, ref) : lineDiff(ref, work)
+    return { binary: false, lines: contextualDiff(lines, context) }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */

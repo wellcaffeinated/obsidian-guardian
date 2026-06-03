@@ -370,7 +370,12 @@ export default class ObsidianGuardianPlugin
     reverse?: boolean,
   ): Promise<FileDiff> {
     if (!this.engine) return { binary: false, lines: [] }
-    return this.engine.fileDiff(path, fromRef, reverse)
+    return this.engine.fileDiff(
+      path,
+      fromRef,
+      reverse,
+      this.settings.diffContext,
+    )
   }
 
   openFile(path: string): void {

@@ -20,6 +20,8 @@ export interface PluginSettings {
   authorName: string
   /** Commit author email recorded on bless. */
   authorEmail: string
+  /** Lines of context shown around each change hunk in inline diffs. */
+  diffContext: number
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   ignore: '',
   authorName: '',
   authorEmail: '',
+  diffContext: 3,
 }
 
 /**

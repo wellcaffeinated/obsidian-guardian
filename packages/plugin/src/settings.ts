@@ -83,6 +83,21 @@ export class GuardianSettingTab extends PluginSettingTab {
         s.authorEmail = v
       }),
     )
+
+    new Setting(containerEl)
+      .setName('Diff context lines')
+      .setDesc(
+        'Lines of unchanged context shown above and below each changed hunk in inline diffs. Hunks separated by at most twice this many unchanged lines are shown without a break.',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('3')
+          .setValue(String(s.diffContext))
+          .onChange((v) => {
+            const n = parseInt(v, 10)
+            if (!Number.isNaN(n) && n >= 0) s.diffContext = n
+          }),
+      )
   }
 
   override hide(): void {

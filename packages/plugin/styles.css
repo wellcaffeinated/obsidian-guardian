@@ -387,6 +387,12 @@
 .og-diff__line--ctx {
   color: var(--text-muted);
 }
+.og-diff__line--snip {
+  color: var(--text-faint);
+  font-style: italic;
+  text-align: center;
+  user-select: none;
+}
 
 /* --- footer --------------------------------------------------------------- */
 .og-footer {

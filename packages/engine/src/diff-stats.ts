@@ -1,10 +1,10 @@
 import { diffLines } from 'diff'
 
-/** One line of a rendered diff: a context, added, or removed line of text. */
+/** One line of a rendered diff: a context, added, removed, or snip line. */
 export interface DiffLine {
-  /** `' '` context, `'+'` added, `'-'` removed. */
-  sign: ' ' | '+' | '-'
-  /** The line text (no trailing newline). */
+  /** `' '` context, `'+'` added, `'-'` removed, `'~'` collapsed snip marker. */
+  sign: ' ' | '+' | '-' | '~'
+  /** The line text (no trailing newline). Snip lines carry a `⋯ N lines` message. */
   text: string
 }
 
@@ -81,6 +81,73 @@ export function lineStats(
     else if (part.removed) removed += part.count ?? 0
   }
   return { added, removed }
+}
+
+/**
+ * Collapse a flat diff into a contextual view: only `context` lines around each
+ * change hunk are shown; runs of unchanged lines outside any hunk window are
+ * replaced by a single `{ sign: '~', text: '⋯ N lines' }` snip marker.
+ *
+ * Two hunks are merged into one contiguous block (no snip between them) when
+ * their windows touch or overlap — i.e. the changes are at most `2 * context +
+ * 1` lines apart, so at most `2 * context` unchanged lines separate them.
+ *
+ * Expects raw {@link lineDiff} output (signs ` `/`+`/`-` only). It *emits* `~`
+ * snip markers but does not accept them as input — don't feed its own output
+ * back in (a `~` would be treated as a change line).
+ */
+export function contextualDiff(lines: DiffLine[], context = 3): DiffLine[] {
+  if (lines.length === 0) return lines
+
+  // Build merged context windows in a single pass over the diff — no
+  // intermediate per-change array. A window is opened around each change line
+  // (clamped to bounds) and extended in place while the next change touches or
+  // overlaps it (`start <= last[1] + 1`).
+  const merged: Array<[number, number]> = []
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]?.sign === ' ') continue
+    const start = Math.max(0, i - context)
+    const end = Math.min(lines.length - 1, i + context)
+    const last = merged[merged.length - 1]
+    if (last && start <= last[1] + 1) {
+      if (end > last[1]) last[1] = end
+    } else {
+      merged.push([start, end])
+    }
+  }
+
+  // No changes (pure-context diff, or the "too large" placeholder) — and the
+  // common small-file case where one window already spans the whole diff: both
+  // collapse to nothing, so return the input untouched (zero allocation).
+  const only = merged[0]
+  if (merged.length === 0) return lines
+  if (
+    merged.length === 1 &&
+    only &&
+    only[0] === 0 &&
+    only[1] === lines.length - 1
+  )
+    return lines
+
+  // Walk merged windows, emitting visible lines and snip markers for gaps.
+  const out: DiffLine[] = []
+  let cursor = 0
+  for (const [start, end] of merged) {
+    if (start > cursor) {
+      const count = start - cursor
+      out.push({ sign: '~', text: `⋯ ${count} line${count === 1 ? '' : 's'}` })
+    }
+    for (let i = start; i <= end; i++) {
+      const line = lines[i]
+      if (line) out.push(line)
+    }
+    cursor = end + 1
+  }
+  if (cursor < lines.length) {
+    const count = lines.length - cursor
+    out.push({ sign: '~', text: `⋯ ${count} line${count === 1 ? '' : 's'}` })
+  }
+  return out
 }
 
 /**

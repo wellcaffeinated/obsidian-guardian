@@ -571,11 +571,19 @@ export class ReviewView extends ItemView {
       return
     }
     for (const line of diff.lines) {
-      const kind = line.sign === '+' ? 'add' : line.sign === '-' ? 'del' : 'ctx'
-      box.createDiv({
-        cls: `og-diff__line og-diff__line--${kind}`,
-        text: `${line.sign} ${line.text}`,
-      })
+      if (line.sign === '~') {
+        box.createDiv({
+          cls: 'og-diff__line og-diff__line--snip',
+          text: line.text,
+        })
+      } else {
+        const kind =
+          line.sign === '+' ? 'add' : line.sign === '-' ? 'del' : 'ctx'
+        box.createDiv({
+          cls: `og-diff__line og-diff__line--${kind}`,
+          text: `${line.sign} ${line.text}`,
+        })
+      }
     }
   }
 
