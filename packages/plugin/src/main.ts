@@ -364,9 +364,13 @@ export default class ObsidianGuardianPlugin
     })
   }
 
-  async fileDiff(path: string, fromRef?: string): Promise<FileDiff> {
+  async fileDiff(
+    path: string,
+    fromRef?: string,
+    reverse?: boolean,
+  ): Promise<FileDiff> {
     if (!this.engine) return { binary: false, lines: [] }
-    return this.engine.fileDiff(path, fromRef)
+    return this.engine.fileDiff(path, fromRef, reverse)
   }
 
   openFile(path: string): void {

@@ -6,7 +6,7 @@ import {
   setIcon,
   type WorkspaceLeaf,
 } from 'obsidian'
-import type { FileRow, PanelData } from './format'
+import { type FileRow, type PanelData, reverseFileRow } from './format'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
@@ -56,8 +56,11 @@ export interface ReviewController {
   revert(path: string): Promise<void>
   /** Restore the whole working tree to a checkpoint commit. */
   restoreCheckpoint(oid: string): Promise<void>
-  /** Compute one file's line diff (base = baseline, or a checkpoint oid). */
-  fileDiff(path: string, fromRef?: string): Promise<FileDiff>
+  /**
+   * Compute one file's line diff (base = baseline, or a checkpoint oid). Pass
+   * `reverse` for the restore direction (working tree → fromRef) used by History.
+   */
+  fileDiff(path: string, fromRef?: string, reverse?: boolean): Promise<FileDiff>
   /** Open a vault file in a new pane. */
   openFile(path: string): void
 }
@@ -116,7 +119,7 @@ export class ReviewView extends ItemView {
    * {@link openFiles} — lets {@link revalidateOpenDiffs} re-fetch open diffs. */
   private readonly fileMeta = new Map<
     string,
-    { path: string; fromRef: string | undefined }
+    { path: string; fromRef: string | undefined; reverse: boolean }
   >()
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
@@ -157,7 +160,11 @@ export class ReviewView extends ItemView {
       if (this.fetching.has(key)) continue
       const meta = this.fileMeta.get(key)
       if (!meta) continue
-      const fresh = await this.controller.fileDiff(meta.path, meta.fromRef)
+      const fresh = await this.controller.fileDiff(
+        meta.path,
+        meta.fromRef,
+        meta.reverse,
+      )
       const prev = this.diffs.get(key)
       if (!prev || !sameDiff(prev, fresh)) {
         this.diffs.set(key, fresh)
@@ -387,17 +394,28 @@ export class ReviewView extends ItemView {
         text: 'Identical to the current state — nothing to restore.',
       })
     } else {
+      // History entries describe a *restore*: the diff direction is
+      // `current → this entry` (what restoring would apply), so the range reads
+      // `current..<hash>` and each row is reversed (an add since the snapshot is a
+      // delete on restore, etc.).
       this.renderCompare(
         body,
-        `${entry.shortHash}..current`,
-        'Restore reverts these files',
+        `current..${entry.shortHash}`,
+        'Restore applies these changes',
       )
       // Checkpoints diff from their own commit; the baseline diffs from the marker
       // (default fromRef = undefined). Key file rows distinctly so diffs don't mix.
       const fromRef = entry.isBaseline ? undefined : entry.oid
       const fromRefKey = entry.isBaseline ? BASELINE_KEY : entry.oid
       for (const change of entry.changes) {
-        this.renderFileRow(body, change, fromRefKey, fromRef, false)
+        this.renderFileRow(
+          body,
+          reverseFileRow(change),
+          fromRefKey,
+          fromRef,
+          false,
+          /* reverse */ true,
+        )
       }
     }
 
@@ -460,11 +478,13 @@ export class ReviewView extends ItemView {
     fromRefKey: string,
     fromRef: string | undefined,
     revertable: boolean,
+    reverse = false,
   ): void {
     const key = `${fromRefKey}:${change.path}`
     const expandable = !change.binary
     const isOpen = expandable && this.openFiles.has(key)
-    if (expandable) this.fileMeta.set(key, { path: change.path, fromRef })
+    if (expandable)
+      this.fileMeta.set(key, { path: change.path, fromRef, reverse })
 
     const wrap = parent.createDiv({ cls: 'og-file' })
     const row = wrap.createDiv({ cls: 'og-file__row' })
@@ -521,7 +541,7 @@ export class ReviewView extends ItemView {
       })
     }
 
-    if (isOpen) this.renderDiff(wrap, key, change.path, fromRef)
+    if (isOpen) this.renderDiff(wrap, key, change.path, fromRef, reverse)
   }
 
   /** Render the expanded inline diff for a file row (lazy-fetched + cached). */
@@ -530,6 +550,7 @@ export class ReviewView extends ItemView {
     key: string,
     path: string,
     fromRef: string | undefined,
+    reverse: boolean,
   ): void {
     const box = wrap.createDiv({ cls: 'og-diff' })
     const ctx = (text: string): void => {
@@ -538,7 +559,7 @@ export class ReviewView extends ItemView {
     const diff = this.diffs.get(key)
     if (!diff) {
       ctx('Loading diff…')
-      this.fetchDiff(key, path, fromRef)
+      this.fetchDiff(key, path, fromRef, reverse)
       return
     }
     if (diff.binary) {
@@ -569,11 +590,12 @@ export class ReviewView extends ItemView {
     key: string,
     path: string,
     fromRef: string | undefined,
+    reverse: boolean,
   ): void {
     if (this.fetching.has(key) || this.diffs.has(key)) return
     this.fetching.add(key)
     void this.controller
-      .fileDiff(path, fromRef)
+      .fileDiff(path, fromRef, reverse)
       .then((diff) => {
         this.diffs.set(key, diff)
         if (this.openFiles.has(key)) this.render()

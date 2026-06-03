@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPanelData,
   formatStats,
+  reverseFileRow,
   shortMarker,
   toFileRow,
 } from '../src/format'
@@ -74,6 +75,40 @@ describe('toFileRow', () => {
     expect(toFileRow(nested)).toMatchObject({
       dir: 'Projects/',
       name: 'Roastery.md',
+    })
+  })
+})
+
+describe('reverseFileRow', () => {
+  it('flips add↔delete, swaps +/- counts, and rewrites stats', () => {
+    expect(reverseFileRow(toFileRow(added))).toMatchObject({
+      kind: 'delete',
+      added: 0,
+      removed: 10,
+      stats: '+0 -10',
+    })
+    expect(reverseFileRow(toFileRow(modified))).toMatchObject({
+      kind: 'modify',
+      added: 3,
+      removed: 5,
+      stats: '+3 -5',
+    })
+  })
+
+  it('flips a rename’s endpoints (path ↔ from)', () => {
+    expect(reverseFileRow(toFileRow(renamed))).toMatchObject({
+      kind: 'rename',
+      path: 'old.md',
+      name: 'old.md',
+      from: 'new.md',
+    })
+  })
+
+  it('keeps binary rows as binary', () => {
+    expect(reverseFileRow(toFileRow(binaryAdd))).toMatchObject({
+      kind: 'delete',
+      binary: true,
+      stats: 'binary',
     })
   })
 })

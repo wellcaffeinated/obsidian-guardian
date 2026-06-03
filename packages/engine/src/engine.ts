@@ -637,21 +637,31 @@ export class ReviewEngine {
   }
 
   /**
-   * Compute the expandable line diff for one path, from a base ref (default: the
-   * baseline marker; pass a checkpoint oid for a checkpoint row) to the current
-   * working tree. Reads only this one file pair (cheap; called lazily on expand).
+   * Compute the expandable line diff for one path, between a base ref (default:
+   * the baseline marker; pass a checkpoint oid for a checkpoint row) and the
+   * current working tree. By default the diff runs `fromRef → working tree` (what
+   * changed since that snapshot). Pass `reverse: true` for the *restore* direction
+   * — `working tree → fromRef` (what restoring that snapshot would apply) — used
+   * by the History entries. Reads only this one file pair (cheap; lazy on expand).
    * Binary files return `{ binary: true, lines: [] }`.
    */
   async fileDiff(
     path: string,
     fromRef: string = this.markerRef,
+    reverse = false,
   ): Promise<FileDiff> {
     const before = await readMarkerBlob(this.ctx, path, fromRef)
     const after = await this.readWorkdir(path)
-    const b = before?.blob ?? new Uint8Array()
-    const a = after ?? new Uint8Array()
-    if (isBinary(b) || isBinary(a)) return { binary: true, lines: [] }
-    return { binary: false, lines: lineDiff(decode(b), decode(a)) }
+    const refBytes = before?.blob ?? new Uint8Array()
+    const workBytes = after ?? new Uint8Array()
+    if (isBinary(refBytes) || isBinary(workBytes))
+      return { binary: true, lines: [] }
+    const ref = decode(refBytes)
+    const work = decode(workBytes)
+    return {
+      binary: false,
+      lines: reverse ? lineDiff(work, ref) : lineDiff(ref, work),
+    }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */

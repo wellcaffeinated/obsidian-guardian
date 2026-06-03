@@ -89,6 +89,35 @@ function splitPath(path: string): { dir: string; name: string } {
   return { dir: `${path.slice(0, slash)}/`, name: path.slice(slash + 1) }
 }
 
+/**
+ * Reverse a file row's direction (a `X → current` change becomes `current → X`)
+ * for the History "restore" view: an addition since the snapshot becomes a
+ * deletion on restore, +/- counts swap, and a rename's endpoints flip.
+ */
+export function reverseFileRow(row: FileRow): FileRow {
+  if (row.kind === 'rename') {
+    const path = row.from ?? row.path
+    const { dir, name } = splitPath(path)
+    return {
+      ...row,
+      path,
+      dir,
+      name,
+      from: row.path,
+      markdown: isMarkdown(path),
+    }
+  }
+  const kind: ChangeKind =
+    row.kind === 'add' ? 'delete' : row.kind === 'delete' ? 'add' : row.kind
+  return {
+    ...row,
+    kind,
+    added: row.removed,
+    removed: row.added,
+    stats: row.binary ? 'binary' : `+${row.removed} -${row.added}`,
+  }
+}
+
 /** Map one {@link ChangeEntry} to a {@link FileRow}. */
 export function toFileRow(change: ChangeEntry): FileRow {
   const { dir, name } = splitPath(change.path)

@@ -206,6 +206,26 @@ describe('fileDiff', () => {
     ])
   })
 
+  it('reverse: diffs working tree → ref (the restore direction)', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\ntwo\n' })
+    const cp = await engine.checkpoint() // checkpoint == baseline → no-op; use baseline
+    expect(cp.created).toBe(false)
+    await write(vault, 'a.md', 'one\ntwo\nthree\n')
+    // Forward (baseline → working tree): three was added.
+    expect((await engine.fileDiff('a.md')).lines).toEqual([
+      { sign: ' ', text: 'one' },
+      { sign: ' ', text: 'two' },
+      { sign: '+', text: 'three' },
+    ])
+    // Reverse (working tree → baseline = what restoring the baseline applies):
+    // three would be removed.
+    expect((await engine.fileDiff('a.md', undefined, true)).lines).toEqual([
+      { sign: ' ', text: 'one' },
+      { sign: ' ', text: 'two' },
+      { sign: '-', text: 'three' },
+    ])
+  })
+
   it('reports an added file as all-additions and an unchanged file as all-context', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'keep\n' })
     await write(vault, 'b.md', 'x\ny\n')
