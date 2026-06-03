@@ -4,7 +4,7 @@ export {
   renderChangesFile,
 } from './changes-file'
 export { randomId, sha256Hex } from './crypto-utils'
-export type { DiffLine } from './diff-stats'
+export { type DiffLine, lineDiff, lineStats } from './diff-stats'
 export { ReviewEngine } from './engine'
 export {
   changesFileName,
