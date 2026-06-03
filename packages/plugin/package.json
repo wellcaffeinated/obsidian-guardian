@@ -16,7 +16,9 @@
     "buffer": "^6.0.3"
   },
   "devDependencies": {
+    "@isomorphic-git/lightning-fs": "^4.6.2",
     "@types/node": "^22.10.0",
+    "fake-indexeddb": "^6.2.5",
     "obsidian": "latest",
     "tsdown": "^0.21.9",
     "typescript": "^6.0.3",
