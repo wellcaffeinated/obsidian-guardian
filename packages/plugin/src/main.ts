@@ -1,4 +1,4 @@
-import * as nodeFs from 'node:fs'
+import LightningFS from '@isomorphic-git/lightning-fs'
 import {
   createRoutingFs,
   type FileDiff,
@@ -11,16 +11,19 @@ import { Buffer as BufferPolyfill } from 'buffer'
 import {
   FileSystemAdapter,
   Notice,
+  Platform,
   Plugin,
   type TAbstractFile,
   type WorkspaceLeaf,
 } from 'obsidian'
+import { createAdapterFs } from './adapter-fs'
 import {
   DEFAULT_SETTINGS,
   type PluginSettings,
   type ResolvedConfig,
   resolvePluginConfig,
 } from './config'
+import { defaultGitDir, desktopFs } from './desktop-env'
 import { buildPanelData, type PanelData } from './format'
 import {
   type ReviewController,
@@ -48,11 +51,18 @@ const INGEST_DEBOUNCE_MS = 1500
  */
 const FIRST_BLESS_DELAY_MS = 3000
 
+/** The composite (worktree + gitdir) fs the engine runs on — typed via
+ * `createRoutingFs` so we needn't import isomorphic-git's `PromiseFsClient`. */
+type RoutingFs = ReturnType<typeof createRoutingFs>
+/** A single fs backend (one half of the router). */
+type FsBackend = Parameters<typeof createRoutingFs>[0]['gitDirFs']
+
 /**
  * The Obsidian plugin adapter: drives the pure {@link ReviewEngine} from vault
  * events, hosts the review panel ({@link ReviewView}), and coordinates blesses
- * across devices via the synced signal folder. Desktop-only (the engine's node
- * builtins resolve to Electron's Node); mobile support is a later phase.
+ * across devices via the synced signal folder. Runs on desktop (node:fs) and
+ * mobile (vault adapter for the working tree + IndexedDB for the object store);
+ * the per-platform backends are assembled in {@link resolveEnv}.
  */
 export default class ObsidianGuardianPlugin
   extends Plugin
@@ -61,6 +71,8 @@ export default class ObsidianGuardianPlugin
   settings: PluginSettings = { ...DEFAULT_SETTINGS }
   private engine: ReviewEngine | null = null
   private config: ResolvedConfig | null = null
+  /** The engine's composite fs; reused to read peer signals on the worktree. */
+  private fs: RoutingFs | null = null
   private active = false
   private timeline: Timeline | null = null
   private peers: PanelData['peers'] = null
@@ -143,7 +155,7 @@ export default class ObsidianGuardianPlugin
 
   /** Build the engine and, if this device is already active, resume reviewing. */
   private async init(): Promise<void> {
-    if (!this.buildEngine()) return
+    if (!(await this.buildEngine())) return
     const engine = this.engine
     if (!engine) return
     try {
@@ -160,33 +172,78 @@ export default class ObsidianGuardianPlugin
   }
 
   /** Resolve config + construct the engine (no side effects on the repo). */
-  private buildEngine(): boolean {
-    const adapter = this.app.vault.adapter
-    if (!(adapter instanceof FileSystemAdapter)) {
-      new Notice('Obsidian Guardian needs a desktop (filesystem) vault.')
-      return false
-    }
+  private async buildEngine(): Promise<boolean> {
     try {
-      this.config = resolvePluginConfig({
-        vaultPath: adapter.getBasePath(),
-        vaultName: this.app.vault.getName(),
-        settings: this.settings,
-      })
-      // Route the working tree and the device-local object store through one
-      // composite fs. On desktop both backends are node:fs (a behaviour-neutral
-      // seam); on mobile this is where the worktree (app.vault.adapter) and the
-      // gitdir (IndexedDB) backends diverge without touching the engine.
-      const fs = createRoutingFs({
-        gitDir: this.config.gitDir,
-        gitDirFs: nodeFs,
-        workTreeFs: nodeFs,
-      })
-      this.engine = new ReviewEngine({ ...this.config, fs })
+      const env = await this.resolveEnv()
+      if (!env) return false
+      this.config = env.config
+      this.fs = env.fs
+      this.engine = new ReviewEngine({ ...env.config, fs: env.fs })
       return true
     } catch (err) {
       this.fail('configure', err)
       return false
     }
+  }
+
+  /**
+   * Build the per-platform engine config + composite (worktree + gitdir) fs.
+   * The router lets the engine run unchanged while the two filesystems differ:
+   * - **Mobile:** worktree on the vault adapter ({@link createAdapterFs}), gitdir
+   *   on IndexedDB ({@link LightningFS}). A synthetic `vaultPath` (`/vault`, the
+   *   adapter-fs base) + a virtual gitdir (`/git`) inside a per-vault IndexedDB
+   *   store.
+   * - **Desktop:** real `node:fs` for both, via `desktop-env.desktopFs()` —
+   *   which pulls `node:fs` through a runtime `require` only when called here, so
+   *   the builtin never evaluates at module load on mobile.
+   */
+  private async resolveEnv(): Promise<{
+    config: ResolvedConfig
+    fs: RoutingFs
+  } | null> {
+    const { adapter } = this.app.vault
+    const vaultName = this.app.vault.getName()
+
+    if (Platform.isMobileApp) {
+      const vaultPath = '/vault'
+      const gitDir = '/git'
+      const config = resolvePluginConfig({
+        vaultPath,
+        gitDir,
+        settings: this.settings,
+      })
+      const fs = createRoutingFs({
+        gitDir,
+        gitDirFs: new LightningFS(
+          `obsidian-guardian-${vaultName}`,
+        ) as unknown as FsBackend,
+        workTreeFs: createAdapterFs({
+          adapter,
+          base: vaultPath,
+        }) as unknown as FsBackend,
+      })
+      return { config, fs }
+    }
+
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice('Obsidian Guardian needs a desktop (filesystem) vault.')
+      return null
+    }
+    const nodeFs = desktopFs() as unknown as FsBackend
+    const vaultPath = adapter.getBasePath()
+    const gitDir =
+      this.settings.gitDir.trim() || defaultGitDir(vaultPath, vaultName)
+    const config = resolvePluginConfig({
+      vaultPath,
+      gitDir,
+      settings: this.settings,
+    })
+    const fs = createRoutingFs({
+      gitDir,
+      gitDirFs: nodeFs,
+      workTreeFs: nodeFs,
+    })
+    return { config, fs }
   }
 
   private registerVaultEvents(): void {
@@ -243,7 +300,7 @@ export default class ObsidianGuardianPlugin
   }
 
   async activate(): Promise<void> {
-    if (!this.engine && !this.buildEngine()) return
+    if (!this.engine && !(await this.buildEngine())) return
     const engine = this.engine
     if (!engine) return
     try {
@@ -323,6 +380,7 @@ export default class ObsidianGuardianPlugin
     // Rebuild the engine under the new config, then re-resume.
     this.engine = null
     this.config = null
+    this.fs = null
     await this.init()
   }
 
@@ -376,13 +434,15 @@ export default class ObsidianGuardianPlugin
 
   /** Read peer device-state files for the header presence summary. */
   private async loadPeers(): Promise<PanelData['peers']> {
-    if (!this.config) return null
+    if (!this.config || !this.fs) return null
     try {
       const syncDir = syncDirPath(
         this.config.vaultPath,
         this.config.reviewFolder,
       )
-      const states = await readDeviceStates(nodeFs, syncDir)
+      // Read through the engine's worktree fs (node:fs on desktop, the vault
+      // adapter on mobile) — the synced signals live in the working tree.
+      const states = await readDeviceStates(this.fs, syncDir)
       if (states.length === 0) return null
       const updatedAt = states
         .map((s) => s.updatedAt)

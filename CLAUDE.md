@@ -259,10 +259,31 @@ packages/
         builtin name). Desktop unaffected; the live smoke exercises the bundled
         polyfill via `safe-buffer` during git-sha. On-device Android still
         unverified (only the desktop container is available here).
-  - [ ] **Real mobile backends behind the router:** worktree→`app.vault.adapter`
-        (as `fs.promises`), gitdir→LightningFS (live IndexedDB, not faked); wire
-        the plugin to build them per-platform; drop `platform:'node'`/
-        `isDesktopOnly`.
+  - [x] **Real mobile backends behind the router + `isDesktopOnly:false`.**
+        `resolveEnv` (`main.ts`) builds per platform: **mobile** = worktree on the
+        vault adapter (`adapter-fs.ts` `createAdapterFs`, strips a synthetic
+        `/vault` base → vault-relative; node-faithful mkdir) + gitdir on live
+        IndexedDB (`LightningFS`, `/git`); **desktop** = `node:fs` for both.
+        The real load-safety work was getting the bundle to load with **no Node
+        builtin `require` at module-load** on mobile:
+        - `node:fs`/`node:os` confined to `desktop-env.ts`, pulled via a *runtime
+          `require` inside functions* (only the desktop branch calls them) — not a
+          top-level import (which would eval at load).
+        - `config.ts` made mobile-safe: dropped `node:crypto` (→ engine
+          `sha256Hex`) and `node:os` (→ `desktop-env.defaultGitDir`); takes an
+          explicit `gitDir` per platform.
+        - tsdown aliases so deps don't externalise Node builtins: `node:path`/
+          `path` → **`pathe`**; **`isomorphic-git` → its ESM build** (`index.js`;
+          the `node` export condition's `index.cjs` does `require('crypto'/'fs')`
+          at module top — fatal on mobile, since the engine loads iso-git eagerly.
+          The ESM build uses Web Crypto + the injected fs). Plus the existing
+          `buffer` alias. New plugin deps: `pathe`, `@isomorphic-git/lightning-fs`.
+        Verified on desktop: bundle audit shows the only load-time external
+        `require` is `obsidian` (fs/os are inside `desktop-env` fns; iso-git ESM
+        has none); 31 plugin tests incl. the **mobile-split spike** (engine over
+        adapter-fs + LightningFS); and the **live desktop smoke** drives the
+        iso-git ESM build through onboard/bless/edit. **On-device Android still
+        unverified** (no mobile runtime here — see the deferred Chromium smoke).
   - [x] **`state.ts` node:fs leak closed:** `readSeq`/`nextSeq`/`*BlessHighWater`
         now take the injected `fs` (mkdirp via `ensureDir`); engine call-sites pass
         `this.fs`. The mobile IndexedDB spike exercises this through `bless`.
@@ -275,7 +296,18 @@ packages/
         and every 64-byte-block residue (`test/crypto-utils.test.ts`). The engine
         `src/` is now free of every node builtin except `node:path` (pure string
         ops, fine in WKWebView).
-  - [ ] Sideload + Syncthing round-trip across the user's devices.
+  - [ ] **Mobile-ish smoke in a real Chromium (deferred TODO).** Run the engine
+        spike (adapter-fs + live IndexedDB + Buffer polyfill, no Node) in a
+        headless Chromium — via **Vitest browser mode** (lighter) or a small
+        Playwright script — to verify load-safety + browser-runtime correctness
+        without a device. **No Docker needed** (Playwright launches its own
+        Chromium; Docker is only for the desktop-Obsidian smoke). Caveats here:
+        one-time ~150 MB Chromium download + headless launch need the sandbox
+        bypass. Android's WebView is Chromium (this covers it); iOS WKWebView is
+        Apple-only and can't be Dockerised (and is low-priority anyway). Does NOT
+        cover Obsidian's real mobile loader / `CapacitorAdapter` quirks.
+  - [ ] Sideload + Syncthing round-trip across the user's devices (the user tests
+        on **Android** directly for now).
 - [ ] **Phase 5 — Polish.** Peer/sync UX, packaging (later;
   community store is low priority).
 

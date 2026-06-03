@@ -5,5 +5,5 @@
   "minAppVersion": "1.5.0",
   "description": "Review and accept/revert what agents changed in your vault since the last blessed state.",
   "author": "Jasper Palfree",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

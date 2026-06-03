@@ -1,7 +1,5 @@
-import { createHash } from 'node:crypto'
-import { homedir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
 import type { EngineConfig } from '@obsidian-guardian/engine'
+import { isAbsolute, relative } from 'pathe'
 
 /** Default review folder — kept in sync with the engine's `DEFAULT_REVIEW_FOLDER`. */
 export const DEFAULT_REVIEW_FOLDER = '_OG'
@@ -43,28 +41,6 @@ export interface ResolvedConfig extends Omit<EngineConfig, 'fs'> {
   reviewFolder: string
 }
 
-/** Per-OS app-data root — the git database lives here, never inside the synced vault. */
-function appDataRoot(): string {
-  const home = homedir()
-  if (process.platform === 'win32') {
-    return process.env.APPDATA ?? join(home, 'AppData', 'Roaming')
-  }
-  if (process.platform === 'darwin') {
-    return join(home, 'Library', 'Application Support')
-  }
-  return process.env.XDG_DATA_HOME ?? join(home, '.local', 'share')
-}
-
-/**
- * The default git database for a vault: a per-machine, per-vault folder under
- * OS app-data, keyed by a hash of the absolute vault path so two vaults (or two
- * machines holding the same synced vault) never collide.
- */
-export function defaultGitDir(vaultPath: string, vaultName: string): string {
-  const hash = createHash('sha256').update(vaultPath).digest('hex').slice(0, 16)
-  return join(appDataRoot(), 'obsidian-guardian', `${vaultName}-${hash}`)
-}
-
 /** Throw if the git database would live inside the vault (breaks the invariant). */
 function assertOutsideVault(vaultPath: string, gitDir: string): void {
   const rel = relative(vaultPath, gitDir)
@@ -84,15 +60,19 @@ function parseIgnore(raw: string): string[] {
     .filter((s) => s.length > 0)
 }
 
-/** Resolve the vault path + persisted settings into an absolute {@link ResolvedConfig}. */
+/**
+ * Resolve the vault path + an already-chosen `gitDir` + persisted settings into
+ * a {@link ResolvedConfig}. Mobile-safe (no `node:` builtins): the caller picks
+ * `gitDir` per platform — desktop derives it under OS app-data
+ * (`desktop-env.defaultGitDir`); mobile uses an IndexedDB-virtual path.
+ */
 export function resolvePluginConfig(args: {
   vaultPath: string
-  vaultName: string
+  gitDir: string
   settings: PluginSettings
 }): ResolvedConfig {
-  const { vaultPath, vaultName, settings } = args
+  const { vaultPath, gitDir, settings } = args
   const reviewFolder = settings.reviewFolder.trim() || DEFAULT_REVIEW_FOLDER
-  const gitDir = settings.gitDir.trim() || defaultGitDir(vaultPath, vaultName)
   assertOutsideVault(vaultPath, gitDir)
   const ignore = parseIgnore(settings.ignore)
   const author = settings.authorName.trim()
