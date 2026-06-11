@@ -551,13 +551,14 @@ content-addressed approval entirely).
   in the diff/manifest; (f) plugin (mobile) `ObjectStore` over LightningFS.
   Reuse: content hashing, blob read, ignore matcher.
 
-## Relationship to existing plans
+## Lineage (superseded plans)
 
-- Supersedes the cross-device coordination angle of
-  [`file-controlled-bless.md`](file-controlled-bless.md) (its monotonic-seq +
-  high-water-mark survive as `observedSeq`).
-- Consumes + extends the checkpoint primitive from
-  [`checkpoints-and-undo.md`](checkpoints-and-undo.md) (checkpoint = local commit;
-  baseline = separate advanceable commit ref; retained unblessed checkpoints = undo).
-- [`multi-vault-watcher.md`](multi-vault-watcher.md) becomes irrelevant if the
-  server is dropped (a server, if kept, is just another symmetric client).
+This design absorbed three earlier (now-removed) plans:
+
+- A **file-controlled bless** plan — its monotonic-seq + high-water-mark survive
+  here as `observedSeq`.
+- A **checkpoints-and-undo** plan — its checkpoint primitive is consumed and
+  extended (checkpoint = local commit; baseline = a separate advanceable commit
+  ref; retained unblessed checkpoints = undo).
+- A **multi-vault-watcher** plan — made irrelevant by dropping the server (a
+  server, if ever reintroduced, is just another symmetric client).
