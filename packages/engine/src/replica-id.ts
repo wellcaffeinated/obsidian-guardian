@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import type { PromiseFsClient } from 'isomorphic-git'
-import { randomId, sha256Hex } from './crypto-utils'
+import { randomId } from './crypto-utils'
 import { ensureDir } from './fs-utils'
 
 /** Subdirectory (inside the gitDir) the engine owns for its own state. */
@@ -55,36 +55,4 @@ export async function readOrCreateReplicaId(
     // Lost the create race — converge on whoever won.
     return (await readId(fs, file)) ?? id
   }
-}
-
-/** The review-note filename for a replica id: `changes-<12-hex-hash>.md`. */
-export function reviewNoteName(replicaId: string): string {
-  return `changes-${replicaHash(replicaId)}.md`
-}
-
-/**
- * Filename prefix shared by all of one replica's rotating signal files:
- * `changes-<12-hex-replica>-`. A watcher matches this prefix to act only on its
- * **own** replica's files — never another device's files synced into the same
- * review folder.
- */
-export function changesFilePrefix(replicaId: string): string {
-  return `changes-${replicaHash(replicaId)}-`
-}
-
-/**
- * The rotating signal filename for a replica + snapshot:
- * `changes-<12-hex-replica>-<8-hex-snapshot>.md`. The replica hash keeps two
- * devices reviewing one synced vault from ever sharing a filename; the short
- * snapshot oid makes each snapshot's file immutable and distinct.
- */
-export function changesFileName(
-  replicaId: string,
-  snapshotOid: string,
-): string {
-  return `${changesFilePrefix(replicaId)}${snapshotOid.slice(0, 8)}.md`
-}
-
-function replicaHash(replicaId: string): string {
-  return sha256Hex(replicaId).slice(0, 12)
 }

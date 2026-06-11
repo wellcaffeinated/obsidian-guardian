@@ -6,8 +6,6 @@ import { ensureDir } from './fs-utils'
 const STATE_DIR = 'obsidian-guardian'
 /** Monotonic snapshot sequence counter. */
 const SEQ_FILE = 'snapshot-seq'
-/** Highest snapshot seq ever blessed (the bless high-water mark). */
-const HWM_FILE = 'bless-hwm'
 
 /**
  * Engine state counters persisted **inside the gitDir** — which is per-machine
@@ -56,21 +54,4 @@ export async function nextSeq(
   const next = (await readSeq(fs, gitDir)) + 1
   await writeCounter(fs, gitDir, SEQ_FILE, next)
   return next
-}
-
-/** The highest snapshot seq ever blessed for this gitDir (0 if none). */
-export async function readBlessHighWater(
-  fs: PromiseFsClient,
-  gitDir: string,
-): Promise<number> {
-  return readCounter(fs, join(gitDir, STATE_DIR, HWM_FILE))
-}
-
-/** Record a new bless high-water mark. */
-export async function writeBlessHighWater(
-  fs: PromiseFsClient,
-  gitDir: string,
-  seq: number,
-): Promise<void> {
-  await writeCounter(fs, gitDir, HWM_FILE, seq)
 }

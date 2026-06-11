@@ -1,7 +1,6 @@
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import ignore, { type Ignore } from 'ignore'
 import type { PromiseFsClient } from 'isomorphic-git'
-import { renderChangesFile } from './changes-file'
 import {
   DEFAULT_AUTHOR,
   DEFAULT_IGNORE,
@@ -37,25 +36,14 @@ import {
   writeTag,
 } from './git-ops'
 import { readLocalState, writeLocalState } from './local-state'
-import {
-  changesFileName,
-  changesFilePrefix,
-  readOrCreateReplicaId,
-  reviewNoteName,
-} from './replica-id'
-import { renderReviewNote } from './review-note'
+import { readOrCreateReplicaId } from './replica-id'
 import {
   readBlessRecords,
   syncDirPath,
   writeBlessRecord,
   writeDeviceState,
 } from './signal-store'
-import {
-  nextSeq,
-  readBlessHighWater,
-  readSeq,
-  writeBlessHighWater,
-} from './state'
+import { nextSeq, readSeq } from './state'
 import {
   type ApplyResult,
   type Author,
@@ -68,7 +56,6 @@ import {
   type FileDiff,
   type LocalState,
   type Manifest,
-  type SnapshotStatus,
   type Status,
   type Timeline,
   type TimelineEntry,
@@ -112,7 +99,6 @@ export class ReviewEngine {
   private readonly matcher: Ignore
   private readonly configReplicaId: string | undefined
   private resolvedReplicaId: string | undefined
-  private resolvedReviewNoteName: string | undefined
   /**
    * Incremental working-tree content index (`path → blob oid`), primed lazily by
    * a full scan and then maintained per-path via {@link touch}. `null` = not
@@ -146,10 +132,6 @@ export class ReviewEngine {
     }
   }
 
-  private get vaultName(): string {
-    return basename(this.vaultPath)
-  }
-
   /** Absolute path of the synced signal folder (`<reviewFolder>/sync/`). */
   private get syncDir(): string {
     return syncDirPath(this.vaultPath, this.reviewFolder)
@@ -157,18 +139,6 @@ export class ReviewEngine {
 
   private isIgnored = (path: string): boolean =>
     path.length > 0 && this.matcher.ignores(path)
-
-  /**
-   * Filename of the generated review note for this replica: `changes-<hash>.md`,
-   * derived from a per-gitDir id. Valid after {@link onboard} (or the first
-   * {@link refresh}); throws if read before the id has been resolved.
-   */
-  get reviewNoteName(): string {
-    if (this.resolvedReviewNoteName === undefined) {
-      throw new Error('reviewNoteName is available after onboard()')
-    }
-    return this.resolvedReviewNoteName
-  }
 
   /** Resolve (once) and cache this replica's id. */
   private async ensureReplicaId(): Promise<string> {
@@ -178,25 +148,6 @@ export class ReviewEngine {
         (await readOrCreateReplicaId(this.fs, this.gitDir))
     }
     return this.resolvedReplicaId
-  }
-
-  /** Resolve (once) and cache this replica's review-note filename. */
-  private async ensureReviewNoteName(): Promise<string> {
-    if (this.resolvedReviewNoteName === undefined) {
-      this.resolvedReviewNoteName = reviewNoteName(await this.ensureReplicaId())
-    }
-    return this.resolvedReviewNoteName
-  }
-
-  /**
-   * Filename prefix shared by this replica's rotating signal files. Valid after
-   * {@link onboard}. A watcher matches this to act only on its own files.
-   */
-  get signalPrefix(): string {
-    if (this.resolvedReplicaId === undefined) {
-      throw new Error('signalPrefix is available after onboard()')
-    }
-    return changesFilePrefix(this.resolvedReplicaId)
   }
 
   /**
@@ -213,12 +164,10 @@ export class ReviewEngine {
     const existing = await resolveRef(this.ctx)
     if (existing) {
       await this.seedExclude()
-      await this.ensureReviewNoteName()
       return false
     }
     await init(this.ctx)
     await this.seedExclude()
-    await this.ensureReviewNoteName()
     // Empty commit first so the marker resolves, then capture current state.
     await commit(this.ctx, this.author, 'chore: initialize baseline')
     await this.commitAll('chore: baseline')
@@ -245,19 +194,6 @@ export class ReviewEngine {
       clean: changes.length === 0,
       changes,
     }
-  }
-
-  /** Compute status and (re)write the review note. Returns the status. */
-  async refresh(): Promise<Status> {
-    const status = await this.status()
-    const dir = join(this.vaultPath, this.reviewFolder)
-    await ensureDir(this.fs, dir)
-    const name = await this.ensureReviewNoteName()
-    await this.fs.promises.writeFile(
-      join(dir, name),
-      renderReviewNote(status, this.vaultName),
-    )
-    return status
   }
 
   /**
@@ -515,76 +451,6 @@ export class ReviewEngine {
     const seq = await nextSeq(this.fs, this.gitDir)
     await writeRef(this.ctx, `refs/og/checkpoints/${pad(seq)}`, oid)
     return { oid, seq, created: true }
-  }
-
-  /**
-   * Bless a pinned snapshot: advance the baseline to the snapshot commit's tree,
-   * iff `seq` is strictly greater than the locally-persisted high-water mark.
-   * Otherwise a no-op (returns false) — this is what makes the signal
-   * order-independent and idempotent: stale/duplicate/reordered signals (a lower
-   * or equal seq) can never regress the baseline. The working tree is untouched;
-   * any changes after the snapshot remain pending.
-   */
-  async blessSnapshot(oid: string, seq: number): Promise<boolean> {
-    if (seq <= (await readBlessHighWater(this.fs, this.gitDir))) return false
-    const tree = await readTreeOid(this.ctx, oid)
-    const baseline = await resolveRef(this.ctx)
-    await commitTree(
-      this.ctx,
-      this.author,
-      `chore: bless snapshot ${oid.slice(0, 8)}`,
-      tree,
-      baseline ? [baseline] : [],
-    )
-    await writeBlessHighWater(this.fs, this.gitDir, seq)
-    return true
-  }
-
-  /**
-   * Snapshot the current tree and return a {@link SnapshotStatus}: the pinned
-   * snapshot oid + seq, the current baseline (and when it was set), and the net
-   * change list from baseline to the snapshot. The adapter renders this into a
-   * rotating, immutable signal file; `accepted: true` synced back targets
-   * {@link blessSnapshot}.
-   */
-  async snapshot(): Promise<SnapshotStatus> {
-    const { oid, seq } = await this.checkpoint()
-    const changes = await this.buildChanges()
-    changes.sort((a, b) => a.path.localeCompare(b.path))
-    const baseline = await resolveRef(this.ctx)
-    return {
-      snapshot: oid,
-      seq,
-      baseline,
-      baselineAt: baseline ? await readCommitTime(this.ctx, baseline) : null,
-      generatedAt: new Date().toISOString(),
-      clean: changes.length === 0,
-      changes,
-    }
-  }
-
-  /**
-   * Snapshot the current tree and write its rotating, immutable signal file
-   * (`<reviewFolder>/changes-<replica>-<snap8>.md`). Returns the status, the
-   * filename written, and the exact bytes written (so a watcher can record a
-   * self-write hash and not react to its own output). Does not delete superseded
-   * files — retention is the adapter's concern.
-   */
-  async writeSnapshot(): Promise<{
-    status: SnapshotStatus
-    fileName: string
-    content: string
-  }> {
-    const status = await this.snapshot()
-    const fileName = changesFileName(
-      await this.ensureReplicaId(),
-      status.snapshot,
-    )
-    const content = renderChangesFile(status, this.vaultName)
-    const dir = join(this.vaultPath, this.reviewFolder)
-    await ensureDir(this.fs, dir)
-    await this.fs.promises.writeFile(join(dir, fileName), content)
-    return { status, fileName, content }
   }
 
   /**
