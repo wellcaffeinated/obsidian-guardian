@@ -65,8 +65,6 @@ packages/
   engine/   pure ReviewEngine (refactor: inject WorkingTree+ObjectStore,
             baseline-as-commit-ref, checkpoints, content-gated diff, coordination)
   plugin/   THE product — Obsidian plugin (desktop + Android); the GUI panel
-  cli/      legacy (old container watcher). Kept for now as a headless test
-            harness / future "always-on desktop peer"; not the deliverable.
 ```
 
 ## Commands
@@ -318,12 +316,28 @@ packages/
 **Phase-2 coordination core ✅** + **Phase-3 plugin integration ✅** (real-data
 panel + **event-driven incremental hashing**, wired + live) + **composite routing
 `fs` ✅** (Phase-1 close-out) + **mobile storage spike ✅** (gitdir on IndexedDB
-via the router). Gates: `pnpm -r test` = **92** (65 engine / 9 cli / 18 plugin),
+via the router) + **CLI + old signal-file machinery removed ✅** (see below).
+Gates: `pnpm -r test` = **91** (57 engine / 34 plugin; CLI gone),
 `pnpm -r typecheck`, `pnpm lint` (1 pre-existing warning only), `pnpm knip`,
 engine + plugin `pnpm build`, and `pnpm test:plugin` (live headless smoke) all
 pass.
 
-**Latest increments (this session):**
+**CLI removal (this session):** `packages/cli/` deleted entirely. Root container
+artifacts (`Dockerfile`, `docker-compose.example.yaml`, `docker-entrypoint.sh`,
+`docker-og.sh`, `example/vaults/demo`, `example/.gitdir`) deleted. Scripts
+`scripts/smoke.sh`, `scripts/smoke-docker.sh`, `scripts/demo-reset.sh` deleted;
+`scripts/lib.sh` trimmed of CLI-only helpers (`signal_prefix`, `reset_demo`).
+Root `package.json` scripts trimmed (removed `test:smoke`, `test:docker`,
+`test:all`, `demo:up/down/reset`, `og`). Engine dead machinery removed:
+`review-note.ts`, `changes-file.ts`; `SnapshotStatus` type; engine methods
+`refresh()`, `snapshot()`, `writeSnapshot()`, `blessSnapshot()`, `reviewNoteName`
+getter, `signalPrefix` getter; `replica-id.ts` old helpers (`reviewNoteName`,
+`changesFilePrefix`, `changesFileName`); `state.ts` HWM helpers
+(`readBlessHighWater`, `writeBlessHighWater`). Tests covering only removed
+machinery deleted (`bless-protocol.test.ts`; `refresh`+`replica id` describes in
+`engine.test.ts`).
+
+**Latest increments (prior session):**
 1. **Composite routing `fs`** (`createRoutingFs`, `routing-fs.ts` +
    `test/routing-fs.test.ts`) — Phase-1 close-out; exported.
 2. **Plugin builds its engine via `createRoutingFs`** (`main.ts`; desktop = both
@@ -335,7 +349,7 @@ pass.
    ignores `{recursive}`) and `readOrCreateReplicaId(fs, …)` (was static node:fs).
    New engine devDeps: `@isomorphic-git/lightning-fs`, `fake-indexeddb`.
 
-Suite: **92** (65 engine / 9 cli / 18 plugin); typecheck/lint/knip/builds green
+Suite: **91** (57 engine / 34 plugin); typecheck/lint/knip/builds green
 (lint has 1 pre-existing *warning* only).
 
 **Next step — Phase 4 continues (see the Phase-4 checklist above):**
