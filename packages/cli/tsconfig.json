@@ -1,9 +1,0 @@
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "@obsidian-guardian/engine": ["../engine/src/index.ts"]
-    }
-  },
-  "include": ["src", "test", "*.config.ts"]
-}
