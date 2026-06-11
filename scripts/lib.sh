@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Shared helpers for the smoke scripts: logging, assertions, polling, and the
-# demo reset used for both pre-clean and teardown.
+# plugin-test reset used for both pre-clean and teardown.
 
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$_LIB_DIR/.." && pwd)"
-COMPOSE_FILE="$ROOT/docker-compose.example.yaml"
-DEMO_VAULT="$ROOT/example/vaults/demo"
-ENGINE_CJS="$ROOT/packages/engine/dist/index.cjs"
 PLUGIN_COMPOSE_FILE="$ROOT/docker-compose.plugin-test.yaml"
 PLUGIN_VAULT="$ROOT/example/plugin-vault"
 
@@ -31,23 +28,6 @@ wait_for() {
     [ "$(date +%s)" -ge "$deadline" ] && return 1
     sleep 1
   done
-}
-
-# The rotating signal-file prefix the engine would generate for a replica id.
-signal_prefix() {
-  node -e 'const{changesFilePrefix}=require(process.argv[1]);process.stdout.write(changesFilePrefix(process.argv[2]))' \
-    "$ENGINE_CJS" "$1"
-}
-
-# Reset the demo to a pristine, committed state: stop the container, drop the
-# review output and the git-database contents, restore the seed vault files.
-# Used as both the pre-clean and the teardown, so a crashed run self-heals.
-reset_demo() {
-  docker compose -f "$COMPOSE_FILE" down --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$DEMO_VAULT/_OG"
-  find "$ROOT/example/.gitdir" -mindepth 1 ! -name .gitkeep -exec rm -rf {} + \
-    2>/dev/null || true
-  git -C "$ROOT" restore -- example/vaults/demo >/dev/null 2>&1 || true
 }
 
 # Reset the plugin-test vault: stop the obsidian container, drop the review
