@@ -1,6 +1,6 @@
 {
   "name": "@obsidian-guardian/plugin",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Obsidian plugin adapter over the Obsidian Guardian engine: a vault-wide review panel with bless/rollback.",

@@ -1,0 +1,60 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} \
+            packages/plugin/dist/main.js \
+            packages/plugin/dist/styles.css \
+            packages/plugin/dist/manifest.json
+      - name: Update versions.json
+        env:
+          GH_TOKEN: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          MIN_APP_VERSION=$(jq -r '.minAppVersion' packages/plugin/manifest.json)
+          jq --arg v "$VERSION" --arg min "$MIN_APP_VERSION" '. + {($v): $min}' versions.json > versions.json.tmp
+          mv versions.json.tmp versions.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+          git add versions.json
+          git commit -m "chore: update versions.json for $VERSION [skip ci]"
+          git push
