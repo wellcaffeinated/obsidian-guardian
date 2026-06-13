@@ -162,7 +162,6 @@ plugin builds, and `pnpm test:plugin` all green.
 - Container starts in **Restricted Mode**: enable via the `enable-plugin-<appId>`
   localStorage flag + `loadManifests()` + `enablePlugin(id)`, and **retry** (the
   plugins API lags `obs version` readiness).
-- Roastery specifics: docker + `pnpm install` need `dangerouslyDisableSandbox`.
 
 ## Troubleshooting an Obsidian plugin (general playbook)
 
