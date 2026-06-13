@@ -1,379 +1,213 @@
 # Obsidian Guardian
 
-> **Agent vault review.** Let agents (Claude, etc.) edit an Obsidian vault, then
-> review exactly what changed since the last _blessed_ state — a complete,
-> trustworthy change list with per-file accept/revert, reviewable on mobile. The
-> guarantee is **complete visibility + clean per-file undo**, not prevention.
+> Review what changed in your Obsidian vault since the last _blessed_ state, and
+> roll back — entirely inside Obsidian, on every device. No server, no designated
+> "git manager." Each device tracks changes in its own local (never-synced) git;
+> devices coordinate the _trust marker_ ("blessed up to here") through small
+> synced JSON files. Mobile is a first-class participant, not a viewer.
 
-## Canonical design
+**This file is orientation for developing the repo.** For the product itself read
+`README.md`. The three other docs:
 
-The full design lives in the user's Obsidian vault note **"Agent vault review —
-plan"** (read it with `obsidian read file='Agent vault review — plan'`). That
-note is the source of truth for intent; this file tracks how we're _building_
-it.
+- **[`plans/p2p-bless-protocol.md`](plans/p2p-bless-protocol.md)** — the
+  protocol spec (data shapes, the content-gated apply rule, storage model,
+  retention, mobile). Source of truth for _intent_; read it before touching the
+  coordination layer.
+- **[`plans/future-plugin-work.md`](plans/future-plugin-work.md)** — outstanding
+  work (mobile verification, retention/GC, crash-republish, auto-checkpointing,
+  polish, packaging).
+- **[`plans/build-history.md`](plans/build-history.md)** — how the plugin was
+  built (the phased rewrite log); archaeology only, not a spec.
 
-Design docs for not-yet-built features live in **`plans/`** (one file per
-feature). Current plans:
+## The model in five sentences
 
-- [`plans/checkpoints-and-undo.md`](plans/checkpoints-and-undo.md) — checkpoint
-  primitive + `undo` to make `rollback`/`revert` recoverable (data-loss safety
-  net; foundation for the parked auto-checkpointing feature).
-- [`plans/multi-vault-watcher.md`](plans/multi-vault-watcher.md) — one container
-  watching many vaults under a `/vaults` dir (each its own gitDir); engine
-  unchanged, additive CLI multiplexing layer.
-- [`plans/file-controlled-bless.md`](plans/file-controlled-bless.md) — bless via
-  a synced markdown signal (mobile-triggerable): pinned-snapshot bless-by-oid,
-  sibling-parented checkpoints, rotating immutable signal files with a retention
-  grace, and a monotonic-seq / non-synced high-water-mark protocol for
-  order-independent, sync-agnostic robustness. Consumes a minimal slice of
-  `checkpoints-and-undo`.
+1. **Checkpoint** = a content snapshot (local git commit) with a per-device
+   monotonic seq, made on a debounced batch or manually.
+2. **Baseline** = a commit ref = "last blessed state"; **pending** = diff
+   baseline→working-tree (content-hashed).
+3. **Bless** = approve a checkpoint, published as a synced delta manifest of
+   absolute content hashes (`bless-<deviceId>.json`).
+4. Each device **applies** a received bless _per file_, advancing its baseline
+   only where its own synced working tree already hashes to the blessed value —
+   that single **content gate** is the whole conflict story (no vector clocks,
+   no CRDT lib).
+5. **Rollback** to a checkpoint is an intentional, auto-blessed move; unblessed
+   checkpoints are retained for a window so a rollback can be undone.
 
-## Core concept (marker model)
+## Architecture: one engine, injected storage
 
-One advanceable marker per vault, `baseline` = "last blessed state".
+`ReviewEngine` is a **pure TS module with zero `obsidian` imports**. Its storage
+is **dependency-injected** so it runs on desktop and mobile:
 
-- **Pending** = `git diff baseline → working tree` (concurrency-agnostic).
-- **Bless** = advance `baseline` to now. **Revert file** = restore one path from
-  baseline.
-- **Rollback** = reset tree to baseline. **Tag** = named snapshot.
+- **Working tree** — list/read/write vault files. Impl: `node:fs` (desktop) or
+  `app.vault.adapter` (plugin; works on Android).
+- **Object store** — content-addressed git db (blob/tree/commit/ref),
+  **device-local, never synced**. Impl: isomorphic-git over `node:fs` (desktop)
+  or over IndexedDB (mobile, via LightningFS).
 
-The git database lives **outside** the synced vault tree (app-data / a separate
-`gitDir`), so nothing git-related ever syncs to other devices. Ignores live in
-`.git/info/exclude` (confirmed: isomorphic-git honors `info/exclude`, not just
-`.gitignore`).
+`createRoutingFs` composes the two into one `PromiseFsClient` the engine sees:
+paths under `gitDir` → object store, everything else → working tree. Only the
+content **Hash** (git blob sha) must agree across devices; each store is private,
+so on-disk format need not.
 
-## Architecture: one engine, many shells
-
-`ReviewEngine` is a **pure TypeScript module with zero Obsidian imports** (Node
-`fs` + isomorphic-git only). The same engine code runs unchanged in:
-
-- the **CLI/container** adapter (test rig + Roastery service), and
-- the **Obsidian plugin** adapter (desktop, `isDesktopOnly`).
-
-Keeping the engine Obsidian-free is the load-bearing invariant. Never
+**Keeping the engine `obsidian`-free is the load-bearing invariant.** Never
 `import … from 'obsidian'` in `packages/engine`.
 
-## Repo layout (pnpm workspace monorepo)
+## Repo layout (pnpm workspace)
 
 ```
 packages/
-  engine/        Phase 0 — pure ReviewEngine (this is the durable asset)
-  cli/           Phase 1 — CLI + container adapter, watch mode (later)
-  plugin/        Phase 2 — Obsidian plugin adapter (later)
+  engine/   pure ReviewEngine — the durable, storage-injected core
+  plugin/   THE product — Obsidian plugin (desktop + Android); the GUI panel
+plans/      design spec, future work, build history (see top of this file)
+scripts/    headless-Obsidian smoke + screenshot helpers
 ```
+
+### Key modules
+
+- Engine coordination: `engine.ts` (`bless`/`applyBless`/`ingest`/`recover`/
+  `timeline`/`checkpoint`/`restoreCheckpoint`/`fileDiff`), `signal-store.ts`
+  (`_OG/sync/` JSON), `local-state.ts`, `git-ops.ts` (tree overlay), `routing-fs.ts`,
+  `crypto-utils.ts` / `fs-utils.ts` (mobile-safe primitives).
+- Plugin: `main.ts` (the `ReviewController`/`SettingsHost`; wiring, commands,
+  watchers), `review-view.ts` (the panel + `ConfirmModal`), `format.ts`
+  (`buildPanelData` — the DOM-free view-model seam), `settings.ts`,
+  `config.ts` / `desktop-env.ts` / `adapter-fs.ts` (per-platform env).
 
 ## Commands
 
-Root (run across all packages):
-
 - `pnpm build` · `pnpm test` · `pnpm typecheck` · `pnpm lint` · `pnpm format` ·
-  `pnpm knip`
+  `pnpm knip` (root = all packages; per-pkg via
+  `pnpm --filter @obsidian-guardian/<pkg> <script>`).
+- `pnpm test:plugin` — full plugin smoke in the headless container. **Needs docker.**
+- `pnpm screenshot:plugin [out.png]` / `pnpm shot:stub` — build + load the plugin
+  in headless Obsidian and capture the panel (the `shot:stub` variant uses an
+  overlay workaround for Obsidian deferred views). **Needs docker.**
 
-Per package (e.g. `packages/engine`): same scripts via
-`pnpm --filter @obsidian-guardian/engine <script>`.
-
-End-to-end smoke tests (`scripts/`, shell):
-
-- `pnpm test:smoke` — drives the **built** CLI through
-  onboard→status→refresh→revert→bless against a throwaway temp vault (plus the
-  outside-vault guard and `--replica-id` override). No docker; seconds.
-- `pnpm test:docker` — full container path: builds the image, runs the watcher
-  against the example vault via the real compose file, edits a file, asserts the
-  review note updates and is written back host-owned, and that
-  `docker compose exec guardian og bless` runs as the host user and refreshes
-  the note. Needs the docker daemon.
-- `pnpm test:plugin` — full plugin path: builds + loads the plugin in headless
-  Obsidian (`obsidian-headless-container`), drives it over `docker exec`,
-  asserts load/refresh/bless. Needs docker.
-- `pnpm test:all` — `pnpm test && pnpm test:smoke` (the no-docker gate).
-- `pnpm screenshot:plugin [out.png]` — capture the plugin's review panel running
-  in headless Obsidian (default `screenshots/plugin-<timestamp>.png`); brings
-  the container up / hot-reloads, leaves it running.
-- Demo helpers: `pnpm demo:up` / `pnpm demo:down` / `pnpm demo:reset`.
-
-**Each smoke pre-cleans before it runs** (host smoke wipes its temp workspace;
-`test:docker`/ `demo:reset` reset the demo vault + gitDir to the committed
-state), so a crashed prior run never poisons the next. **Agents: run
-`pnpm test:smoke` to validate the built CLI before claiming it works** — it
-exercises the bundled binary + arg parsing that the Vitest suites (run against
-`src`) don't cover.
+The merge gate is: `pnpm -r test`, `pnpm -r typecheck`, `pnpm lint` (one
+pre-existing CSS specificity _warning_ is acceptable), `pnpm knip`, engine +
+plugin builds, and `pnpm test:plugin` all green.
 
 ## Conventions
 
-- **Package manager: pnpm** (not npm/yarn/bun — this overrides the global bun
-  preference for this structured/publishable project).
-- **Bundler: tsdown**; **tests: Vitest**; **lint/format: Biome**; **dead code:
-  Knip**. Helper skills for these are installed under `.agents/skills`
-  (symlinked into `.claude/skills`): `tsdown`, `vitest`, `knip`,
-  `configure-workflows`, `release-please-*`. Use them.
+- **pnpm** (not npm/yarn/bun). **tsdown** bundler · **Vitest** · **Biome**
+  lint/format · **Knip** dead-code. Helper skills under `.claude/skills`
+  (`tsdown`, `vitest`, `knip`, …) — use them.
+- **Named exports only**; re-export from each package's `src/index.ts`.
+- **Conventional Commits** (feat/fix/chore/…).
 - Engine tests run against **`src`** (vitest alias) for fast iteration; the
   published artifact is verified separately by `build` + `typecheck`
   (`isolatedDeclarations` requires explicit public types).
-- **Named exports only**; all public exports re-exported from each package's
-  `src/index.ts`.
-- **Conventional Commits** (feat/fix/chore/…) — feeds Release Please later and
-  doubles as a progress log.
+- **Never shadow a base-class member when extending an `obsidian` class.** When
+  you `extends ItemView` / `View` / `Plugin` / `Modal` / `Component` / etc., your
+  instance **fields and methods share one namespace with the base class's own
+  fields/methods** — and Obsidian's runtime classes have many _undocumented_
+  members not in `obsidian.d.ts`. A collision is silent and brutal: e.g. a
+  `ReviewView` field named `open` made Obsidian construct the view but **never
+  call `onOpen()`** (blank panel, no error). Defend against it:
+  - Give view/plugin state **specific, namespaced field names** (`openCheckpoints`,
+    not `open`; `diffCache`, not `cache`). Avoid bare generic names — `open`,
+    `view`, `app`, `leaf`, `icon`, `scope`, `navigation`, `containerEl`,
+    `contentEl`, `state`, `load`, `update`, `setState`/`getState`, `register*`,
+    `on*` — on any subclass of an `obsidian` class.
+  - Only **intentionally** override base methods (`onOpen`, `onClose`, `onload`,
+    `onunload`, `getViewType`, `getDisplayText`, `getIcon`, `setState`); mark them
+    `override` so the compiler flags a name that unexpectedly _does_ match the
+    base (and conversely a typo'd override that silently doesn't).
 
-## Status & progress
+## Locked decisions
 
-**Update this section at every milestone — it is the resume point across
-sessions.**
+- Symmetric, **server-less**: every device runs the engine over its own
+  never-synced git; the only cross-device channel is synced JSON signal files.
+- **Coordinate the marker, not git state.** Bless = content-hash delta manifest;
+  apply is per-file content-gated ⇒ idempotent/commutative ⇒ no vector clock, no
+  CRDT library. The post-sync working tree is the conflict arbiter.
+- **Baseline = a commit ref**; advancing = new tree (old baseline ⊕ blessed
+  paths) + atomic ref move. Lean on isomorphic-git for storage everywhere.
+- **One file per device** in `_OG/sync/` (single-writer) ⇒ no Syncthing
+  conflict files. `_OG/` is git-ignored (ignores via `.git/info/exclude`), so
+  signals **sync but never commit** into the device-local store.
+- **gitDir / object store never inside the vault** (Syncthing would corrupt it):
+  app-data on desktop, IndexedDB on mobile. Device-local store loss ⇒ graceful
+  **re-bootstrap** from synced blesses, never loss of the trust marker.
+- **Reviewing is opt-in per device** (the local store's existence is the
+  non-synced activation flag); installing the plugin doesn't auto-start a
+  competing history.
+- **Sync = Syncthing** for this user (not Obsidian Sync): syncs everything on
+  disk incl. dot-folders, no toggles. **Targets: desktop (Linux) + Android**;
+  iOS is best-effort/low-priority. **Self-install** (copy `dist/` into the
+  vault's plugins folder; Syncthing propagates it) — no community store yet.
+- **Auto-checkpointing** (when built) is a toggleable, off-by-default setting that
+  snapshots only — it **never** advances the `baseline` (no auto-bless). The
+  manual `Checkpoint` button is always available.
 
-Phasing (de-risk hard logic in the easy environment first):
+## Engine invariants — don't regress these
 
-- [x] **Phase 0 — Engine core.** Pure TS module + Vitest against temp folders.
-      **✅ green: 13/13 tests, typecheck, lint, knip, build all pass.**
-  - [x] Repo init, monorepo scaffold, tooling, skills wired in.
-  - [x] `types.ts`, `defaults.ts`.
-  - [x] `git-ops.ts` (isomorphic-git wrappers: init, statusMatrix, commitAll,
-        readBlob, checkout, writeRef).
-  - [x] `diff-stats.ts` (line +/- counts, binary detection).
-  - [x] `review-note.ts` (markdown render of Status).
-  - [x] `engine.ts` (`ReviewEngine`:
-        onboard/status/refresh/bless/revert/rollback/tag).
-  - [x] `index.ts` exports.
-  - [x] Tests written: onboard idempotent, status add/modify/delete/rename,
-        bless advances marker, revert restores one file, rollback resets tree,
-        ignores respected, review note content.
-  - [x] `pnpm install`, green `build` + `test` + `typecheck` + `lint` + `knip`.
-  - Notable engine decisions made during build:
-    - Change detection is **content-based** via
-      `git.walk(TREE(marker), WORKDIR)` hashing each file (collected through a
-      side-effect accumulator, not `git.walk`'s return). This avoids
-      isomorphic-git's index stat-cache shortcut, which silently missed
-      _same-byte-length_ edits.
-    - Ignores use the **`ignore` package as the authoritative matcher** in the
-      engine, _and_ seed `.git/info/exclude` for cross-tool agreement
-      (belt-and-suspenders — isomorphic-git's own ignore handling on an external
-      gitdir proved unreliable).
-    - revert/rollback **write baseline blob bytes directly** (not
-      `git.checkout`, which also stat-skips).
-    - `refresh()` returns `Status` (slightly richer than the plan's `void`) for
-      adapter/test convenience.
-  - Known follow-ups (not blockers): status hashes every non-ignored file each
-    call (fine for a vault, optimise with a stat cache later); rename detection
-    is exact-content only.
-- [x] **Phase 1 — CLI + container.** Thin CLI over the engine, `watch` mode
-      (chokidar). Doubles as Roastery service. **✅ green: 24/24 tests (17
-      engine + 7 cli), typecheck, lint, knip, build; demo + `test:smoke` +
-      `test:docker` verified end-to-end.**
-  - [x] `packages/cli` scaffold (tsdown two-entry: `index.ts` lib + `cli.ts` bin
-        with shebang; vitest aliases engine→src; tsconfig paths→engine src;
-        isolatedDeclarations build).
-  - [x] `config.ts` — `resolveConfig` (flag → `OG_*` env → default; git-dir
-        defaults to sibling `<vault>.gitdir`; asserts git-dir is outside the
-        vault).
-  - [x] `commands.ts` — `createEngine` (auto-onboards, idempotent) +
-        `formatStatus` (terminal summary).
-  - [x] `watch.ts` — `runWatch`: chokidar over the vault, debounced `refresh()`,
-        serialized (running/dirty lock), **ignores its own `_OG/` writes** (no
-        refresh loop), `--poll` for bind-mount reliability.
-  - [x] `cli.ts` — `node:util.parseArgs` dispatch for
-        `onboard/status/refresh/bless/revert/rollback/tag/watch`; `--json`
-        status; `--replica-id`/`--review-folder` overrides; SIGINT/SIGTERM clean
-        stop.
-  - [x] Tests: config precedence + outside-vault guard; `formatStatus`; watch
-        writes note on initial pass + after a change; watch never reacts to its
-        own output. Engine: per-replica note name (shape, persistence across
-        instances, differs per gitDir, explicit-id override).
-  - [x] Container: root `Dockerfile` (node:22-slim, corepack pnpm + `gosu`,
-        build workspace), `docker-entrypoint.sh` (start root, chown gitdir, then
-        `exec og`) + `docker-og.sh` → `/usr/local/bin/og` (the gosu drop to
-        PUID/PGID; also the short command for `docker compose exec`), default
-        `CMD watch --poll`; `.dockerignore`. **The image builds only the CLI +
-        engine via `pnpm --filter "@obsidian-guardian/cli..." build`** — never
-        `pnpm -r build`, because the image only installs the engine+cli
-        manifests and the Phase-2 plugin package (with its tsdown/obsidian dev
-        deps) isn't present, so a whole-workspace build fails on
-        `tsdown: not found`.
-  - [x] `docker-compose.example.yaml` + `example/` demo: seed vault at
-        `example/vaults/demo`, git-dir bind-mounted **outside** the vault at
-        `example/.gitdir` (tracked `.gitkeep`, contents ignored), `_OG/`
-        ignored, `PUID/PGID` (default 1000) so notes are written host-owned. (No
-        `/etc/machine-id` mount — the review filename is keyed to the
-        per-replica id persisted in the gitDir.)
-  - [x] Root `og` script (`pnpm og <cmd>`, host Node) drives the demo vault from
-        the host for bless/revert/rollback/tag — distinct from the in-image `og`
-        shim.
-  - [x] Smoke scripts (`scripts/`, shell): `test:smoke` (host CLI lifecycle, no
-        docker), `test:docker` (container watch + `exec og bless`), shared
-        `lib.sh` (assert/wait_for/reset_demo); each pre-cleans so a crashed run
-        can't poison the next.
-  - Notable Phase-1 decisions:
-    - Arg parsing via **built-in `node:util.parseArgs`** (zero deps); only
-      runtime dep added is `chokidar` v4.
-    - Watcher **must** ignore the review folder or writing the note retriggers
-      refresh forever — covered by a regression test.
-    - `--poll` defaulted in the demo: polling reliably sees host edits across
-      the Docker bind-mount regardless of inotify propagation.
-    - **Review folder default `_OG`** (configurable via
-      `--review-folder`/`OG_REVIEW_FOLDER`). **Review filename is per-replica:
-      `changes-<12-hex>.md`**, hash of a replica id. The id is a random UUID
-      persisted at `<gitDir>/obsidian-guardian/replica-id` (engine
-      `replica-id.ts`, `readOrCreateReplicaId`, exclusive `wx` create so
-      concurrent fresh onboards converge). Resolved lazily at `onboard()`
-      (gitDir must exist first); `ReviewEngine.reviewNoteName` is valid
-      thereafter. Per-replica (= per-gitDir, 1:1 with vault), which is exactly
-      the collision-avoidance unit — two replicas of one synced vault never
-      share a file. No hardware probing, no OS branch, no container mount.
-      Override the seed via
-      `--replica-id`/`OG_REPLICA_ID`/`EngineConfig.replicaId`.
-    - Container drops root→host user the **linux-server way** (`gosu` +
-      `PUID`/`PGID`), not a static compose `user:`. Verified: review note
-      written back owned by the host user. Management commands:
-      `docker compose run --rm guardian <cmd>` (through the entrypoint) or,
-      against a running watcher, `docker compose exec guardian og <cmd>` — `og`
-      is a PATH shim (`docker-og.sh`) that re-does the gosu drop so `exec` runs
-      as the host user with a short command.
-    - **`bless`/`revert`/`rollback` refresh the review note** themselves (CLI
-      layer). `bless` changes no vault files, so a running watcher wouldn't
-      re-render the note otherwise; this keeps a one-shot management command's
-      output correct without a watcher.
-    - Demo verified live: container watch → host edit → debounced refresh →
-      updated `_OG/changes-<hash>.md`; filename stable across restart (persisted
-      id), identical between container and host `pnpm og` over the shared
-      gitDir; bless/revert/rollback all work.
-- [~] **Phase 2 — Obsidian plugin.** Same engine; `packages/plugin`
-  (`isDesktopOnly`). **First slice ✅ green: 40 tests (17 engine + 7 cli + 16
-  plugin), typecheck, lint, knip, build; live plugin smoke passes in the
-  headless container.** First slice = configure + see changes + bless +
-  rollback; per-file revert/tag deliberately deferred (native file history
-  covers single files).
-  - [x] `packages/plugin` scaffold: `manifest.json` (`isDesktopOnly: true`),
-        tsdown emits CJS `main.js` (`format:['cjs']`, `outExtensions js:'.js'`,
-        `deps.alwaysBundle:[/.*/]` + `neverBundle:['obsidian','electron']` so
-        the bundle is self-contained and node builtins resolve to Electron's
-        Node), `build:done` hook copies `manifest.json`+`styles.css` into
-        `dist/`. `obsidian` is a devDep (external).
-  - [x] `config.ts` — `resolvePluginConfig`: `vaultPath` from
-        `FileSystemAdapter.getBasePath()`, `gitDir` under **OS app-data**
-        (`~/.local/share`|`Application Support`|`%APPDATA%`) keyed by
-        `sha256(vaultPath)` so it's per-machine/per-vault and OUTSIDE the synced
-        tree; ports the outside-vault assert. Persisted settings override.
-  - [x] `watcher.ts` (Obsidian-free, ported from `watch.ts`):
-        `createSerializedRefresh` (dirty-flag), `shouldIgnorePath` (ignore
-        `_OG/` + `.obsidian/` or rendering the note re-triggers refresh),
-        `createDebouncer`. `format.ts`: pure `Status`→rows for the panel (the
-        DOM-free unit-test seam).
-  - [x] `review-view.ts` — `ReviewView` (ItemView) opened as a **main-area tab**
-        (vault-wide, not a sidebar) via `workspace.getLeaf(true)`; header
-        (baseline short-SHA, clean/active), Refresh/Bless/Roll-back buttons,
-        change list; `ConfirmModal` gates rollback. `settings.ts` —
-        `GuardianSettingTab`
-        (ignores/marker/author/review-folder/gitDir/replicaId; rebuilds engine
-        on `hide()`).
-  - [x] `main.ts` — `ObsidianGuardianPlugin` implements the view controller +
-        settings host: `onLayoutReady`→`initEngine` (new
-        `ReviewEngine`→`onboard`→`refresh`), debounced refresh on
-        `vault.on(modify/create/delete/rename)`, commands
-        (open/refresh/bless/rollback), ribbon + clickable status-bar.
-  - [x] Live rig: `docker-compose.plugin-test.yaml` (image
-        `ghcr.io/wellcaffeinated/obsidian-headless-container`, single vault
-        mount), seed `example/plugin-vault/`, `scripts/smoke-plugin.sh` +
-        `pnpm test:plugin` (build→copy plugin in→enable→assert load+no
-        errors→screenshot→edit reflects→bless clears), `reset_plugin` in
-        `lib.sh` (pre-clean + teardown).
-  - Notable Phase-2 decisions / gotchas:
-    - **Engine runs unchanged on desktop**: its
-      `node:fs`/`node:path`/`node:os`/`node:crypto` resolve to Electron's Node;
-      `isDesktopOnly` keeps it off mobile (mobile stays view-only via the synced
-      note).
-    - **Explicit per-machine activation (no silent auto-onboard).** Plugin
-      settings can sync (Obsidian Sync / git), so a second desktop opening the
-      same vault must NOT silently spin up its own git history and emit a
-      competing review note. The plugin no longer onboards on load:
-      `initEngine()` constructs the engine and calls the pure
-      `engine.isOnboarded()` (resolves the marker, never creates state). If this
-      machine's (per-machine, app-data) gitDir already has a baseline → resume
-      normally (`onboard()` is idempotent there). If not → stay **inactive**,
-      write nothing, and render an "Start reviewing on this machine" opt-in
-      (`renderInactive` in `review-view.ts`; command
-      `obsidian-guardian:activate`; status bar shows `OG: inactive`). The
-      gitDir's existence _is_ the non-synced activation flag — no extra
-      persisted state. Activation (`main.ts activate()`) onboards + runs the
-      first-bless. The plugin smoke asserts the inactive→activate→note flow.
-    - **`replicaId` is not a synced plugin setting.** It was removed from
-      `PluginSettings`/the settings tab: a synced explicit replica id would make
-      every machine share one `changes-<hash>.md` filename and collide. The
-      engine's own per-gitDir persisted random id gives correct per-machine
-      isolation; the CLI keeps `EngineConfig.replicaId` for the advanced
-      override.
-    - **First-activation auto-bless.** `onboard()` snapshots the baseline before
-      Obsidian finishes writing its own startup config
-      (`.obsidian/core-plugins.json`, the plugin adding itself to
-      `community-plugins.json`), so those self-writes show as pending. Fix:
-      `onboard()` returns `boolean` (true = freshly initialised); on a fresh
-      onboard the plugin advances the baseline once after a settle delay
-      (`FIRST_BLESS_DELAY_MS` = 3s in `main.ts`). Now reached via explicit
-      activation (above), still scoped to first activation only (later loads
-      find an existing marker → no re-bless), so it never silently absorbs agent
-      changes on normal loads — `.obsidian` settings stay tracked thereafter.
-      The smoke test waits past the settle before its test edit; biome ignores
-      `**/.obsidian` (installed plugin bundles + app state aren't our source).
-    - **Test only in the headless container, never the real Obsidian.** Drive it
-      with `docker exec <container> obsidian <cmd>` (skip the ssrv socket/shim).
-      The container defaults to **Restricted Mode**: the master switch is the
-      `enable-plugin-<appId>` **localStorage** flag — set it directly +
-      `loadManifests()` + `enablePlugin(id)`, and **retry** (idempotent) because
-      `obs version` can succeed a beat before the plugins API is ready.
-  - [ ] Remaining for Phase 2: per-file revert + tag in the panel;
-        community-store packaging (release-please for the plugin, versioned
-        `manifest.json`/`versions.json`); broader live assertions (rollback,
-        mobile-emulation read of the note).
-- [ ] **Phase 3 — Optional.** Claude integration layer;
-      watcher-enacts-checkboxes; plugin-on-headless.
+- **Mobile-clean.** The engine `src/` uses the injected `fs` (a `PromiseFsClient`)
+  everywhere and goes through `crypto-utils.ts` (Web Crypto) — the only remaining
+  node builtin is `node:path` (import-only, pure string ops, fine in WKWebView).
+  **Don't reintroduce a static `node:fs`/`node:crypto`/`node:os` import in the
+  engine**, and **don't assume `{recursive: true}` mkdir** (LightningFS ignores it)
+  — use `ensureDir`. In the plugin, keep `node:fs`/`node:os` inside `desktop-env.ts`
+  behind a runtime `require` (never a top-level import — it evals at load on mobile).
+- **Two notions of "pending" differ.** `status().clean` is working-tree-vs-baseline;
+  a bless _obligation_ (`stillPending`) lives in `LocalState.pending`. A gated
+  bless can leave status clean while the obligation persists.
 
-**Future features (parked, prioritised by differentiation):**
+## Testing the plugin (hard-won gotchas)
 
-- **Inline per-file diffs in the review note** (collapsible) — turn the note
-  from a file _list_ into an actually-reviewable diff, the prerequisite for
-  substantive mobile review.
-- **Nicer mobile UX (view + manage).** Today mobile is view-only (raw synced
-  note); `isDesktopOnly` keeps the engine off mobile. Goal: a mobile-capable
-  presentation that _reads_ a structured artifact the desktop writes (or renders
-  it via an Obsidian **Base** over the change list), and captures _intent_
-  (accept/revert checkboxes) written back into the synced note. Git execution
-  always stays on a machine that holds the gitDir — mobile never runs git.
-  Depends on the explicit-activation split (executor vs. viewer) already in
-  place, plus making the review artifact structured (front-matter/JSON, not just
-  prose). This is also the Phase-3 "watcher-enacts-checkboxes" control loop —
-  the thing Obsidian Git structurally can't do.
-- **Auto-checkpointing (NOT auto-bless).** A debounced timer that creates
-  periodic _snapshot commits_ (a revertable timeline) without advancing the
-  `baseline` trust marker — so you accrue granular restore points while "last
-  reviewed" stays put. Auto-_bless_ is deliberately excluded: advancing the
-  baseline on a timer would silently absorb unreviewed agent changes, defeating
-  the core guarantee. Needs the engine to grow an intermediate commit history +
-  per-checkpoint revert (today revert/rollback only target the baseline). Builds
-  on the checkpoint primitive designed in
-  [`plans/checkpoints-and-undo.md`](plans/checkpoints-and-undo.md) (the
-  timer is just an additive trigger on top of `checkpoint()`/`undo()`).
-- **Mobile push notifications via the service layer** (not the plugin — Obsidian
-  mobile is sandboxed, no plugin push API). The CLI/container watcher fires a
-  webhook (ntfy / Pushover / Telegram / APNs) on pending changes.
+- **Only ever test in the headless container, never the user's real Obsidian.**
+  Drive via `docker compose -f docker-compose.plugin-test.yaml exec -T obsidian
+  obsidian <cmd>` (see `scripts/lib.sh`). Plugin id is `obsidian-guardian`.
+- Container starts in **Restricted Mode**: enable via the `enable-plugin-<appId>`
+  localStorage flag + `loadManifests()` + `enablePlugin(id)`, and **retry** (the
+  plugins API lags `obs version` readiness).
 
-**Resume here:** Phase 2 polish — extend `packages/plugin`: add per-file
-**revert** (`engine.revert(path)`) and **tag** to the panel/commands, then wire
-community-store packaging (release-please + `versions.json`). The slice
-(load/onboard/panel/bless/rollback/watch) is built and green; the working
-references are `packages/plugin/src/{main,review-view,config,watcher}.ts` and
-the live loop in `scripts/smoke-plugin.sh` (`pnpm test:plugin`). Engine API:
-`packages/engine/src/index.ts`; CLI adapter: `packages/cli`.
+## Troubleshooting an Obsidian plugin (general playbook)
 
-### Key design decisions (locked)
+Drive everything through the **headless container**, never a real vault.
 
-- git (not jj); own repo (coexists with Obsidian Git, no dependency on it).
-- Marker = a branch named `baseline`; `HEAD` always points at it. Pending =
-  `statusMatrix` (workdir vs marker).
-- Ignores via `.git/info/exclude` (managed block), not a committed `.gitignore`.
-  `.obsidian` plugins/settings tracked; `workspace*.json`/caches ignored.
-- Review note written into `_OG/` inside the vault (configurable; git-ignored,
-  sync-synced) so `[[links]]` resolve on mobile. Filename
-  `changes-<replica-hash>.md` — **per-replica** (hash of a random id persisted
-  in the gitDir, never a synced setting), to avoid sync conflicts when the same
-  vault is reviewed from multiple replicas/devices.
-- **Reviewing is opt-in per machine.** A machine is "active" iff its app-data
-  gitDir already holds a baseline; the plugin never onboards silently on load
-  (synced settings would otherwise make every desktop start a competing
-  history). First activation is an explicit user action.
-- isomorphic-git in all adapters for behavioral parity.
+**First principles**
+
+- **Reproduce in the container and trust it.** It is real Obsidian and behaves
+  like the desktop app (it _can_ mount main-area views, run plugins, etc.). If a
+  "rig limitation" seems to explain a bug, be suspicious — it's usually your code.
+- **Verify the build you're testing is the build you shipped:**
+  `sha256sum dist/main.js <vault>/.../main.js` must match. Reload the plugin fresh
+  from disk between iterations (`obs plugin:reload <id>`, or `disablePlugin` +
+  `enablePlugin`; a full container restart is the most reliable).
+
+**Inspecting live state via `obsidian eval`**
+
+- `await`-ing `setViewState`/`revealLeaf` **inside** an `obs eval` can hang the
+  eval (no output). Pattern that works: **fire the action without awaiting it** in
+  the returned expression, `sleep`, then inspect in a **separate** `obs eval`.
+- For multi-step async, wrap each step in `Promise.race([p, timeout])` so one hung
+  call doesn't swallow the whole result.
+- Capture logs/errors: `obs dev:debug on` then `obs dev:console [level=error]`;
+  `obs dev:errors` is a separate buffer. Or push to a `window.__log` array and read
+  it back with a later eval.
+- Detaching leaves in eval can persist a broken `.obsidian/workspace.json` that
+  survives restarts — `rm` it before booting for a clean slate.
+
+**View won't render / panel is blank**
+
+- Check whether the view actually **mounted**: `leaf.view._loaded === true` and
+  the leaf's `containerEl` has a `workspace-leaf-content` child. If `_loaded` is
+  false, Obsidian never called `load()`/`onOpen()` — the problem is _before_ your
+  render code, so logs inside `onOpen`/`render` won't help.
+- If a view is constructed (`ctor` runs) but never loads, **suspect a member-name
+  collision with the base class** (see Conventions) before blaming async/timing,
+  deferred views, or the rig.
+
+**Investigating mysterious behaviour (blank panels, panels not loading)**
+
+- Build a **minimal working `ItemView`** in the same plugin and confirm it mounts.
+  Then **morph it toward the broken class one change at a time** — each step
+  logged, behind try/catch, checking the error console — until it breaks. The
+  change that flips it is the cause. (Conversely: strip the broken class down until
+  it works.) Register several variants at once and probe them in one run.
+- Hold **one variable at a time**: same registration, same open path, same vault
+  state. Re-confirm your known-good control _each build_.
+- Consider **import/require side effects**: a newly imported module may run code at
+  load time (fatal on mobile if it touches a Node builtin).

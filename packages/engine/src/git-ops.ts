@@ -1,14 +1,17 @@
-import * as fs from 'node:fs'
 import { join } from 'node:path'
-import git, { TREE, WORKDIR } from 'isomorphic-git'
+import git, { type PromiseFsClient, TREE, WORKDIR } from 'isomorphic-git'
 import type { Author } from './types'
 
 /**
- * The minimal context every low-level git operation needs: the work-tree
- * (`dir` = the vault) and the external git database (`gitdir`, outside the
- * synced tree). `ref` is the baseline marker branch.
+ * The minimal context every low-level git operation needs: the injected
+ * filesystem (`fs`), the work-tree (`dir` = the vault), the external git
+ * database (`gitdir`, outside the synced tree), and the baseline marker branch
+ * (`ref`). `fs` is a `PromiseFsClient` so the engine never imports `node:fs`
+ * directly — desktop passes Node's `fs`, mobile passes a vault-adapter/IndexedDB
+ * shim.
  */
 export interface GitCtx {
+  fs: PromiseFsClient
   dir: string
   gitdir: string
   ref: string
@@ -27,7 +30,7 @@ export async function resolveRef(
   ref: string = ctx.ref,
 ): Promise<string | null> {
   try {
-    return await git.resolveRef({ fs, gitdir: ctx.gitdir, ref })
+    return await git.resolveRef({ fs: ctx.fs, gitdir: ctx.gitdir, ref })
   } catch {
     return null
   }
@@ -36,7 +39,7 @@ export async function resolveRef(
 /** Initialise a repo with the marker as the default branch (idempotent). */
 export async function init(ctx: GitCtx): Promise<void> {
   await git.init({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     defaultBranch: ctx.ref,
@@ -49,25 +52,123 @@ async function hashBytes(bytes: Uint8Array): Promise<string> {
   return oid
 }
 
+/** A flattened tree entry: full vault-relative path → blob oid + git file mode. */
+export interface FlatEntry {
+  oid: string
+  /** Git file mode, e.g. `100644` (regular), `100755` (exec), `120000` (symlink). */
+  mode: string
+}
+
+/** Git blob oid for arbitrary bytes, WITHOUT storing them (for the content gate). */
+export async function hashBlob(bytes: Uint8Array): Promise<string> {
+  return hashBytes(bytes)
+}
+
+/** Write blob bytes into the object store and return their oid (idempotent). */
+export async function writeBlob(
+  ctx: GitCtx,
+  bytes: Uint8Array,
+): Promise<string> {
+  return git.writeBlob({ fs: ctx.fs, gitdir: ctx.gitdir, blob: bytes })
+}
+
 /**
- * Detect changes between the marker tree and the work-tree by **content**
- * (hashing each work-tree file), so same-size edits are never missed and no
- * index stat-cache shortcut can hide a change. `isIgnored` is applied before
- * hashing, so ignored files are cheap to skip.
+ * Recursively flatten a tree commit's tree into a `Map<path, FlatEntry>` keyed
+ * by full vault-relative path. Sub-trees are descended; only blob leaves land in
+ * the map. The inverse of {@link writeFlatTree}.
+ */
+export async function readFlatTree(
+  ctx: GitCtx,
+  treeOid: string,
+): Promise<Map<string, FlatEntry>> {
+  const out = new Map<string, FlatEntry>()
+  const descend = async (oid: string, prefix: string): Promise<void> => {
+    const { tree } = await git.readTree({ fs: ctx.fs, gitdir: ctx.gitdir, oid })
+    for (const entry of tree) {
+      const path = prefix ? `${prefix}/${entry.path}` : entry.path
+      if (entry.type === 'tree') {
+        await descend(entry.oid, path)
+      } else if (entry.type === 'blob') {
+        out.set(path, { oid: entry.oid, mode: entry.mode })
+      }
+    }
+  }
+  await descend(treeOid, '')
+  return out
+}
+
+/**
+ * Build a (possibly nested) git tree from a flat `path → FlatEntry` map and
+ * return its tree oid. Sub-directories are materialised as nested tree objects,
+ * written depth-first. The inverse of {@link readFlatTree}; the blobs must
+ * already exist in the object store (see {@link writeBlob}).
+ */
+export async function writeFlatTree(
+  ctx: GitCtx,
+  entries: Map<string, FlatEntry>,
+): Promise<string> {
+  // Group this level's keys by their first path segment.
+  interface Node {
+    blobs: Map<string, FlatEntry> // leaf name → entry
+    dirs: Map<string, Map<string, FlatEntry>> // dir name → sub-map (relative)
+  }
+  const build = async (level: Map<string, FlatEntry>): Promise<string> => {
+    const node: Node = { blobs: new Map(), dirs: new Map() }
+    for (const [path, entry] of level) {
+      const slash = path.indexOf('/')
+      if (slash === -1) {
+        node.blobs.set(path, entry)
+      } else {
+        const dir = path.slice(0, slash)
+        const rest = path.slice(slash + 1)
+        let sub = node.dirs.get(dir)
+        if (!sub) {
+          sub = new Map()
+          node.dirs.set(dir, sub)
+        }
+        sub.set(rest, entry)
+      }
+    }
+    const tree: Array<{
+      mode: string
+      path: string
+      oid: string
+      type: 'blob' | 'tree'
+    }> = []
+    for (const [name, entry] of node.blobs) {
+      tree.push({ mode: entry.mode, path: name, oid: entry.oid, type: 'blob' })
+    }
+    for (const [name, sub] of node.dirs) {
+      const oid = await build(sub)
+      tree.push({ mode: '040000', path: name, oid, type: 'tree' })
+    }
+    return git.writeTree({ fs: ctx.fs, gitdir: ctx.gitdir, tree })
+  }
+  return build(entries)
+}
+
+/**
+ * Detect changes between a base tree and the work-tree by **content** (hashing
+ * each work-tree file), so same-size edits are never missed and no index
+ * stat-cache shortcut can hide a change. `isIgnored` is applied before hashing,
+ * so ignored files are cheap to skip. `fromRef` defaults to the baseline marker
+ * but may be any commit-ish (e.g. a checkpoint oid) to diff against an arbitrary
+ * snapshot.
  */
 export async function walkChanges(
   ctx: GitCtx,
   isIgnored: (path: string) => boolean,
+  fromRef: string = ctx.ref,
 ): Promise<RawChange[]> {
-  const marker = await resolveRef(ctx)
+  const marker = await resolveRef(ctx, fromRef)
   const changes: RawChange[] = []
   // Collect via a side-effect accumulator rather than git.walk's reduced
   // return value, which is not a reliable flat list across versions.
   await git.walk({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
-    trees: marker ? [TREE({ ref: ctx.ref }), WORKDIR()] : [WORKDIR()],
+    trees: marker ? [TREE({ ref: fromRef }), WORKDIR()] : [WORKDIR()],
     map: async (filepath, entries) => {
       if (filepath === '.') return undefined
       const head = marker ? entries[0] : null
@@ -79,7 +180,9 @@ export async function walkChanges(
       const headOid = head ? ((await head.oid()) ?? null) : null
       let workdirOid: string | null = null
       if (workdir) {
-        const bytes = await fs.promises.readFile(join(ctx.dir, filepath))
+        const bytes = (await ctx.fs.promises.readFile(
+          join(ctx.dir, filepath),
+        )) as Uint8Array
         workdirOid = await hashBytes(bytes)
       }
       if (headOid !== workdirOid) {
@@ -91,16 +194,77 @@ export async function walkChanges(
   return changes
 }
 
-/** Read a file's bytes + blob oid from the marker commit, or null if absent. */
+/**
+ * Hash every non-ignored work-tree file by **content**, returning a flat
+ * `path → blob oid` map of the current working tree. This is the expensive full
+ * scan (one read + hash per file); the engine primes its incremental index from
+ * it once, then maintains the index per-path on edits (see `touch`). Same
+ * content-based detection as {@link walkChanges} — no index stat-cache shortcut.
+ */
+export async function scanWorkdirHashes(
+  ctx: GitCtx,
+  isIgnored: (path: string) => boolean,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  await git.walk({
+    fs: ctx.fs,
+    dir: ctx.dir,
+    gitdir: ctx.gitdir,
+    trees: [WORKDIR()],
+    map: async (filepath, entries) => {
+      if (filepath === '.') return undefined
+      const workdir = entries[0]
+      if (!workdir) return undefined
+      if ((await workdir.type()) === 'tree') return undefined
+      if (isIgnored(filepath)) return undefined
+      const bytes = (await ctx.fs.promises.readFile(
+        join(ctx.dir, filepath),
+      )) as Uint8Array
+      out.set(filepath, await hashBytes(bytes))
+      return undefined
+    },
+  })
+  return out
+}
+
+/**
+ * Derive the raw change list (relative to a base tree) purely from two maps: the
+ * base tree's `path → FlatEntry` and the working tree's `path → blob oid` index.
+ * No file I/O — the inputs already carry content hashes. Emits one entry per path
+ * whose hashes differ (add: no base; delete: no workdir; modify: both differ).
+ */
+export function rawChangesBetween(
+  fromEntries: Map<string, FlatEntry>,
+  workIndex: Map<string, string>,
+): RawChange[] {
+  const out: RawChange[] = []
+  for (const [path, hash] of workIndex) {
+    const headOid = fromEntries.get(path)?.oid ?? null
+    if (headOid !== hash) out.push({ path, headOid, workdirOid: hash })
+  }
+  for (const [path, entry] of fromEntries) {
+    if (!workIndex.has(path)) {
+      out.push({ path, headOid: entry.oid, workdirOid: null })
+    }
+  }
+  return out
+}
+
+/**
+ * Read a file's bytes + blob oid from a commit, or null if absent. `fromRef`
+ * defaults to the baseline marker but may be any commit-ish (e.g. a checkpoint
+ * oid) to read the path's content at an arbitrary snapshot.
+ */
 export async function readMarkerBlob(
   ctx: GitCtx,
   filepath: string,
+  fromRef: string = ctx.ref,
 ): Promise<{ blob: Uint8Array; oid: string } | null> {
-  const commit = await resolveRef(ctx)
+  const commit = await resolveRef(ctx, fromRef)
   if (!commit) return null
   try {
     const { blob, oid } = await git.readBlob({
-      fs,
+      fs: ctx.fs,
       gitdir: ctx.gitdir,
       oid: commit,
       filepath,
@@ -113,13 +277,13 @@ export async function readMarkerBlob(
 
 /** Stage a path (add/update its blob and index entry). */
 export async function add(ctx: GitCtx, filepath: string): Promise<void> {
-  await git.add({ fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
+  await git.add({ fs: ctx.fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
 }
 
 /** Unstage/remove a path from the index. Safe if the path is untracked. */
 export async function remove(ctx: GitCtx, filepath: string): Promise<void> {
   try {
-    await git.remove({ fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
+    await git.remove({ fs: ctx.fs, dir: ctx.dir, gitdir: ctx.gitdir, filepath })
   } catch {
     // path was never tracked — nothing to remove
   }
@@ -132,7 +296,7 @@ export async function commit(
   message: string,
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
@@ -153,27 +317,35 @@ export async function writeRef(
   ref: string,
   oid: string,
 ): Promise<void> {
-  await git.writeRef({ fs, gitdir: ctx.gitdir, ref, value: oid, force: true })
+  await git.writeRef({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    ref,
+    value: oid,
+    force: true,
+  })
 }
 
 /**
- * Commit the current index as a commit with an explicit `parent`, **without**
- * advancing the baseline marker. Returns the new commit oid (so the caller can
- * point a side ref at it — e.g. a checkpoint). The tree is built from the index,
- * so callers must stage the working tree first.
+ * Commit a pre-existing `tree` oid with an explicit `parent` **without** advancing
+ * the baseline marker (`noUpdateBranch`). Used by checkpoint to pin a snapshot
+ * commit (pointed at by a side ref) whose tree is byte-exact with the working
+ * tree, without relying on — or disturbing — the git index. Returns the oid.
  */
-export async function commitIndex(
+export async function commitDetachedTree(
   ctx: GitCtx,
   author: Author,
   message: string,
+  tree: string,
   parent: string[],
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
     author: { ...author, timestamp: Math.floor(Date.now() / 1000) },
+    tree,
     parent,
     ref: ctx.ref,
     noUpdateBranch: true,
@@ -193,7 +365,7 @@ export async function commitTree(
   parent: string[],
 ): Promise<string> {
   return git.commit({
-    fs,
+    fs: ctx.fs,
     dir: ctx.dir,
     gitdir: ctx.gitdir,
     message,
@@ -203,9 +375,30 @@ export async function commitTree(
   })
 }
 
+/**
+ * List the leaf names of the checkpoint refs (`refs/og/checkpoints/<padded-seq>`).
+ * Returns just the padded-seq leaf for each, or `[]` when none exist. Resolve a
+ * leaf to its commit with `resolveRef(ctx, 'refs/og/checkpoints/<leaf>')`.
+ */
+export async function listCheckpointRefs(ctx: GitCtx): Promise<string[]> {
+  try {
+    return await git.listRefs({
+      fs: ctx.fs,
+      gitdir: ctx.gitdir,
+      filepath: 'refs/og/checkpoints',
+    })
+  } catch {
+    return []
+  }
+}
+
 /** The tree oid recorded by a commit. */
 export async function readTreeOid(ctx: GitCtx, oid: string): Promise<string> {
-  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  const { commit } = await git.readCommit({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    oid,
+  })
   return commit.tree
 }
 
@@ -214,6 +407,10 @@ export async function readCommitTime(
   ctx: GitCtx,
   oid: string,
 ): Promise<string> {
-  const { commit } = await git.readCommit({ fs, gitdir: ctx.gitdir, oid })
+  const { commit } = await git.readCommit({
+    fs: ctx.fs,
+    gitdir: ctx.gitdir,
+    oid,
+  })
   return new Date(commit.committer.timestamp * 1000).toISOString()
 }

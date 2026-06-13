@@ -1,346 +1,504 @@
-import { ReviewEngine, type Status } from '@obsidian-guardian/engine'
-import { FileSystemAdapter, Notice, Plugin, TFile } from 'obsidian'
+import LightningFS from '@isomorphic-git/lightning-fs'
+import {
+  createRoutingFs,
+  type FileDiff,
+  ReviewEngine,
+  readDeviceStates,
+  syncDirPath,
+  type Timeline,
+} from '@obsidian-guardian/engine'
+import { Buffer as BufferPolyfill } from 'buffer'
+import {
+  FileSystemAdapter,
+  Notice,
+  Platform,
+  Plugin,
+  type TAbstractFile,
+  type WorkspaceLeaf,
+} from 'obsidian'
+import { createAdapterFs } from './adapter-fs'
 import {
   DEFAULT_SETTINGS,
   type PluginSettings,
+  type ResolvedConfig,
   resolvePluginConfig,
 } from './config'
+import { defaultGitDir, desktopFs } from './desktop-env'
+import { buildPanelData, type PanelData } from './format'
 import {
-  type ActivationState,
-  ConfirmModal,
   type ReviewController,
   ReviewView,
   VIEW_TYPE_REVIEW,
 } from './review-view'
-import { type GuardianSettingsHost, GuardianSettingTab } from './settings'
-import {
-  createDebouncer,
-  createSerializedRefresh,
-  type Debouncer,
-  shouldIgnorePath,
-} from './watcher'
+import { GuardianSettingTab, type SettingsHost } from './settings'
+import { createDebouncer, type Debouncer, shouldIgnorePath } from './watcher'
 
+// isomorphic-git (and its safe-buffer dep) reference a `Buffer` global. Desktop's
+// Electron Node provides one; the mobile WKWebView does not, so the first git op
+// would throw `Buffer is not defined`. Install the bundled feross polyfill (the
+// `buffer` import is aliased to it in tsdown.config.ts) before any engine work.
+// `??=` leaves desktop's native Buffer untouched — this only fills the mobile gap.
+globalThis.Buffer ??= BufferPolyfill
+
+/** Debounce for re-hashing the timeline after vault edits. */
+const REFRESH_DEBOUNCE_MS = 600
+/** Debounce for ingesting peer blesses after the sync folder settles. */
+const INGEST_DEBOUNCE_MS = 1500
 /**
- * After a first-ever onboard, wait this long for the host app's own startup
- * config writes to land before advancing the baseline once (see initEngine).
+ * After a fresh activation, wait for the host app to finish its own startup
+ * writes (`.obsidian/community-plugins.json`, etc.) then advance the baseline
+ * once, so those self-writes don't show as pending forever.
  */
 const FIRST_BLESS_DELAY_MS = 3000
 
+/** The composite (worktree + gitdir) fs the engine runs on — typed via
+ * `createRoutingFs` so we needn't import isomorphic-git's `PromiseFsClient`. */
+type RoutingFs = ReturnType<typeof createRoutingFs>
+/** A single fs backend (one half of the router). */
+type FsBackend = Parameters<typeof createRoutingFs>[0]['gitDirFs']
+
 /**
- * Obsidian adapter over the pure `ReviewEngine`. Desktop-only: the engine reads
- * the vault via Node `fs` (Electron) and keeps its git database under OS
- * app-data, outside the synced tree.
+ * The Obsidian plugin adapter: drives the pure {@link ReviewEngine} from vault
+ * events, hosts the review panel ({@link ReviewView}), and coordinates blesses
+ * across devices via the synced signal folder. Runs on desktop (node:fs) and
+ * mobile (vault adapter for the working tree + IndexedDB for the object store);
+ * the per-platform backends are assembled in {@link resolveEnv}.
  */
 export default class ObsidianGuardianPlugin
   extends Plugin
-  implements ReviewController, GuardianSettingsHost
+  implements ReviewController, SettingsHost
 {
   settings: PluginSettings = { ...DEFAULT_SETTINGS }
-
   private engine: ReviewEngine | null = null
-  /** Onboarded-but-not-yet-activated engine, awaiting an explicit Activate. */
-  private dormantEngine: ReviewEngine | null = null
-  private activationState: ActivationState = 'loading'
-  private lastStatus: Status | null = null
-  private reviewFolder = DEFAULT_SETTINGS.reviewFolder
+  private config: ResolvedConfig | null = null
+  /** The engine's composite fs; reused to read peer signals on the worktree. */
+  private fs: RoutingFs | null = null
+  private active = false
+  private timeline: Timeline | null = null
+  private peers: PanelData['peers'] = null
+  private refreshDebouncer: Debouncer | null = null
+  private ingestDebouncer: Debouncer | null = null
   private statusBarEl: HTMLElement | null = null
-  private debouncer: Debouncer | null = null
-  private firstBlessTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly serializedRefresh = createSerializedRefresh(() =>
-    this.doRefresh(),
-  )
+  /** Paths edited since the last flush, fed to engine.touch() before re-rendering. */
+  private readonly pendingTouches = new Set<string>()
 
   override async onload(): Promise<void> {
     await this.loadSettings()
 
-    this.registerView(VIEW_TYPE_REVIEW, (leaf) => new ReviewView(leaf, this))
+    this.registerView(
+      VIEW_TYPE_REVIEW,
+      (leaf: WorkspaceLeaf) => new ReviewView(leaf, this),
+    )
+    this.addSettingTab(new GuardianSettingTab(this))
 
     this.addRibbonIcon(
       'shield-check',
       'Obsidian Guardian: vault review',
       () => {
-        void this.activateView()
+        void this.openPanel()
       },
     )
 
     this.statusBarEl = this.addStatusBarItem()
     this.statusBarEl.addClass('mod-clickable')
-    this.statusBarEl.addEventListener('click', () => {
-      void this.activateView()
-    })
+    this.statusBarEl.addEventListener('click', () => void this.openPanel())
     this.renderStatusBar()
 
     this.addCommand({
       id: 'open-review-panel',
       name: 'Open vault review',
-      callback: () => {
-        void this.activateView()
-      },
+      callback: () => void this.openPanel(),
     })
     this.addCommand({
       id: 'activate',
-      name: 'Start reviewing on this machine',
-      callback: () => {
-        void this.activate()
-      },
+      name: 'Start reviewing on this device',
+      callback: () => void this.activate(),
     })
     this.addCommand({
       id: 'refresh',
       name: 'Refresh review',
-      callback: () => {
-        void this.refresh()
-      },
+      callback: () => void this.refresh(),
+    })
+    this.addCommand({
+      id: 'checkpoint',
+      name: 'Create checkpoint',
+      callback: () => void this.checkpoint(),
     })
     this.addCommand({
       id: 'bless',
-      name: 'Bless baseline',
-      callback: () => {
-        void this.bless()
-      },
+      name: 'Accept changes as baseline (bless)',
+      callback: () => void this.bless(),
     })
     this.addCommand({
       id: 'rollback',
-      name: 'Roll back to baseline',
-      callback: () => {
-        this.confirmRollback()
-      },
+      name: 'Discard all pending changes (rollback)',
+      callback: () => void this.rollback(),
     })
 
-    this.addSettingTab(new GuardianSettingTab(this.app, this))
+    this.refreshDebouncer = createDebouncer(() => {
+      void this.flushEdits()
+    }, REFRESH_DEBOUNCE_MS)
+    this.ingestDebouncer = createDebouncer(() => {
+      void this.runIngest()
+    }, INGEST_DEBOUNCE_MS)
 
-    // Keep the panel live: debounced refresh on vault changes, ignoring our own
-    // review-note writes (ported from packages/cli/src/watch.ts).
-    this.debouncer = createDebouncer(() => {
-      void this.refresh()
-    }, 300)
-    this.registerEvent(
-      this.app.vault.on('modify', (f) => this.onVaultEvent(f.path)),
-    )
-    this.registerEvent(
-      this.app.vault.on('create', (f) => this.onVaultEvent(f.path)),
-    )
-    this.registerEvent(
-      this.app.vault.on('delete', (f) => this.onVaultEvent(f.path)),
-    )
-    this.registerEvent(
-      this.app.vault.on('rename', (f) => this.onVaultEvent(f.path)),
-    )
-
-    // Defer engine init until the workspace is ready (vault fully loaded).
-    this.app.workspace.onLayoutReady(() => {
-      void this.initEngine()
-    })
+    this.registerVaultEvents()
+    this.app.workspace.onLayoutReady(() => void this.init())
   }
 
   override onunload(): void {
-    this.debouncer?.cancel()
-    if (this.firstBlessTimer) clearTimeout(this.firstBlessTimer)
+    this.refreshDebouncer?.cancel()
+    this.ingestDebouncer?.cancel()
   }
 
-  // --- ReviewController -----------------------------------------------------
+  // --- lifecycle ------------------------------------------------------------
 
-  getActivationState(): ActivationState {
-    return this.activationState
+  /** Build the engine and, if this device is already active, resume reviewing. */
+  private async init(): Promise<void> {
+    if (!(await this.buildEngine())) return
+    const engine = this.engine
+    if (!engine) return
+    try {
+      this.active = await engine.isOnboarded()
+      if (this.active) {
+        await engine.onboard() // idempotent on an existing baseline
+        await engine.recover() // re-apply synced blesses, republish state
+        await this.reloadTimeline()
+      }
+    } catch (err) {
+      this.fail('initialise', err)
+    }
+    this.updateViews()
   }
 
-  getStatus(): Status | null {
-    return this.lastStatus
+  /** Resolve config + construct the engine (no side effects on the repo). */
+  private async buildEngine(): Promise<boolean> {
+    try {
+      const env = await this.resolveEnv()
+      if (!env) return false
+      this.config = env.config
+      this.fs = env.fs
+      this.engine = new ReviewEngine({ ...env.config, fs: env.fs })
+      return true
+    } catch (err) {
+      this.fail('configure', err)
+      return false
+    }
   }
 
   /**
-   * Explicit per-machine opt-in: onboard the dormant engine (creating the local
-   * history) and begin reviewing. No-op once active. Fresh onboards get the
-   * one-time first-bless so the host app's own startup writes don't pollute the
-   * first review.
+   * Build the per-platform engine config + composite (worktree + gitdir) fs.
+   * The router lets the engine run unchanged while the two filesystems differ:
+   * - **Mobile:** worktree on the vault adapter ({@link createAdapterFs}), gitdir
+   *   on IndexedDB ({@link LightningFS}). A synthetic `vaultPath` (`/vault`, the
+   *   adapter-fs base) + a virtual gitdir (`/git`) inside a per-vault IndexedDB
+   *   store.
+   * - **Desktop:** real `node:fs` for both, via `desktop-env.desktopFs()` —
+   *   which pulls `node:fs` through a runtime `require` only when called here, so
+   *   the builtin never evaluates at module load on mobile.
    */
-  async activate(): Promise<void> {
-    if (this.activationState === 'active' || !this.dormantEngine) return
-    const engine = this.dormantEngine
+  private async resolveEnv(): Promise<{
+    config: ResolvedConfig
+    fs: RoutingFs
+  } | null> {
+    const { adapter } = this.app.vault
+    const vaultName = this.app.vault.getName()
+
+    if (Platform.isMobileApp) {
+      const vaultPath = '/vault'
+      const gitDir = '/git'
+      const config = resolvePluginConfig({
+        vaultPath,
+        gitDir,
+        settings: this.settings,
+      })
+      const fs = createRoutingFs({
+        gitDir,
+        gitDirFs: new LightningFS(
+          `obsidian-guardian-${vaultName}`,
+        ) as unknown as FsBackend,
+        workTreeFs: createAdapterFs({
+          adapter,
+          base: vaultPath,
+        }) as unknown as FsBackend,
+      })
+      return { config, fs }
+    }
+
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice('Obsidian Guardian needs a desktop (filesystem) vault.')
+      return null
+    }
+    const nodeFs = desktopFs() as unknown as FsBackend
+    const vaultPath = adapter.getBasePath()
+    const gitDir =
+      this.settings.gitDir.trim() || defaultGitDir(vaultPath, vaultName)
+    const config = resolvePluginConfig({
+      vaultPath,
+      gitDir,
+      settings: this.settings,
+    })
+    const fs = createRoutingFs({
+      gitDir,
+      gitDirFs: nodeFs,
+      workTreeFs: nodeFs,
+    })
+    return { config, fs }
+  }
+
+  private registerVaultEvents(): void {
+    const onChange = (file: TAbstractFile): void =>
+      this.onVaultChange(file.path)
+    this.registerEvent(this.app.vault.on('modify', onChange))
+    this.registerEvent(this.app.vault.on('create', onChange))
+    this.registerEvent(this.app.vault.on('delete', onChange))
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) =>
+        this.onVaultChange(file.path, oldPath),
+      ),
+    )
+  }
+
+  private onVaultChange(path: string, oldPath?: string): void {
+    if (!this.active || !this.config) return
+    const syncDir = `${this.config.reviewFolder}/sync`
+    if (path === syncDir || path.startsWith(`${syncDir}/`)) {
+      this.ingestDebouncer?.schedule()
+      return
+    }
+    // Queue the touched path(s); the debounced flush re-hashes only these.
+    if (!shouldIgnorePath(path, this.config.reviewFolder)) {
+      this.pendingTouches.add(path)
+    }
+    if (oldPath && !shouldIgnorePath(oldPath, this.config.reviewFolder)) {
+      this.pendingTouches.add(oldPath)
+    }
+    if (this.pendingTouches.size > 0) this.refreshDebouncer?.schedule()
+  }
+
+  /** Apply queued per-path re-hashes, then recompute + re-render (the hot path). */
+  private async flushEdits(): Promise<void> {
+    if (!this.active || !this.engine) return
+    const paths = [...this.pendingTouches]
+    this.pendingTouches.clear()
     try {
-      const fresh = await engine.onboard()
-      this.engine = engine
-      this.dormantEngine = null
-      this.activationState = 'active'
-      await this.refresh()
-      if (fresh) this.scheduleFirstBless()
+      for (const path of paths) await this.engine.touch(path)
+      await this.reloadTimeline()
     } catch (err) {
-      this.reportError('Activation failed', err)
+      this.fail('refresh', err)
     }
   }
 
-  refresh(): Promise<void> {
-    return this.serializedRefresh()
+  // --- ReviewController ------------------------------------------------------
+
+  getData(): PanelData {
+    return buildPanelData({
+      active: this.active,
+      timeline: this.timeline,
+      peers: this.peers,
+    })
+  }
+
+  async activate(): Promise<void> {
+    if (!this.engine && !(await this.buildEngine())) return
+    const engine = this.engine
+    if (!engine) return
+    try {
+      const fresh = await engine.onboard()
+      this.active = true
+      await engine.recover()
+      await this.reloadTimeline()
+      if (fresh) {
+        // Let the host settle its own config writes, then bless once.
+        window.setTimeout(() => void this.firstBless(), FIRST_BLESS_DELAY_MS)
+      }
+      new Notice('Obsidian Guardian: reviewing activated on this device.')
+    } catch (err) {
+      this.fail('activate', err)
+    }
+  }
+
+  async refresh(): Promise<void> {
+    if (!this.active || !this.engine) return
+    try {
+      // Explicit refresh = authoritative reconcile (catches any missed events).
+      this.pendingTouches.clear()
+      await this.engine.rescan()
+      await this.reloadTimeline()
+    } catch (err) {
+      this.fail('refresh', err)
+    }
+  }
+
+  async checkpoint(): Promise<void> {
+    await this.run('create checkpoint', async (engine) => {
+      const { created } = await engine.checkpoint()
+      new Notice(created ? 'Checkpoint created.' : 'Nothing to checkpoint.')
+    })
   }
 
   async bless(): Promise<void> {
-    if (!this.engine) return
-    try {
-      await this.engine.bless()
-      new Notice('Obsidian Guardian: baseline blessed.')
-      await this.refresh()
-    } catch (err) {
-      this.reportError('Bless failed', err)
-    }
+    await this.run('bless', async (engine) => {
+      await engine.bless()
+      new Notice('Baseline advanced — changes blessed.')
+    })
   }
 
   async rollback(): Promise<void> {
-    if (!this.engine) return
-    try {
-      await this.engine.rollback()
-      new Notice('Obsidian Guardian: rolled back to baseline.')
-      await this.refresh()
-    } catch (err) {
-      this.reportError('Rollback failed', err)
-    }
+    await this.run('rollback', async (engine) => {
+      await engine.rollback()
+      new Notice('Pending changes discarded.')
+    })
   }
 
-  async openNote(path: string): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(path)
-    if (file instanceof TFile) {
-      await this.app.workspace.getLeaf(false).openFile(file)
-    }
+  async revert(path: string): Promise<void> {
+    await this.run('revert file', async (engine) => {
+      await engine.revert(path)
+    })
   }
 
-  // --- GuardianSettingsHost -------------------------------------------------
+  async restoreCheckpoint(oid: string): Promise<void> {
+    await this.run('restore checkpoint', async (engine) => {
+      await engine.restoreCheckpoint(oid)
+      new Notice('Working tree restored to checkpoint.')
+    })
+  }
 
-  async saveSettings(): Promise<void> {
+  async fileDiff(
+    path: string,
+    fromRef?: string,
+    reverse?: boolean,
+  ): Promise<FileDiff> {
+    if (!this.engine) return { binary: false, lines: [] }
+    return this.engine.fileDiff(path, fromRef, reverse)
+  }
+
+  openFile(path: string): void {
+    void this.app.workspace.openLinkText(path, '', false)
+  }
+
+  // --- SettingsHost ----------------------------------------------------------
+
+  async saveAndReload(): Promise<void> {
     await this.saveData(this.settings)
+    // Rebuild the engine under the new config, then re-resume.
+    this.engine = null
+    this.config = null
+    this.fs = null
+    await this.init()
   }
 
-  async reinit(): Promise<void> {
-    await this.initEngine()
-  }
+  // --- internals -------------------------------------------------------------
 
-  // --- internals ------------------------------------------------------------
-
-  private async loadSettings(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) }
-  }
-
-  private async initEngine(): Promise<void> {
-    const adapter = this.app.vault.adapter
-    if (!(adapter instanceof FileSystemAdapter)) {
-      new Notice('Obsidian Guardian requires a desktop vault.')
-      return
-    }
-    if (this.firstBlessTimer) {
-      clearTimeout(this.firstBlessTimer)
-      this.firstBlessTimer = null
-    }
-    try {
-      const config = resolvePluginConfig({
-        vaultPath: adapter.getBasePath(),
-        vaultName: this.app.vault.getName(),
-        settings: this.settings,
-      })
-      this.reviewFolder = config.reviewFolder
-      const engine = new ReviewEngine(config)
-      this.engine = null
-      // Reviewing is opt-in per machine: only resume automatically if this
-      // machine's (per-machine, app-data) gitDir already holds a baseline.
-      // Otherwise stay inactive and write nothing until the user activates —
-      // so a second synced desktop doesn't silently start a competing history.
-      if (await engine.isOnboarded()) {
-        await engine.onboard() // idempotent: re-seeds ignores, resolves note name
-        this.engine = engine
-        this.dormantEngine = null
-        this.activationState = 'active'
-        await this.refresh()
-      } else {
-        this.dormantEngine = engine
-        this.activationState = 'inactive'
-        this.lastStatus = null
-        this.updateViews()
-        this.renderStatusBar()
-      }
-    } catch (err) {
-      this.engine = null
-      this.dormantEngine = null
-      this.activationState = 'inactive'
-      this.reportError('Initialisation failed', err)
-    }
-  }
-
-  private scheduleFirstBless(): void {
-    if (this.firstBlessTimer) clearTimeout(this.firstBlessTimer)
-    this.firstBlessTimer = setTimeout(() => {
-      this.firstBlessTimer = null
-      void this.firstBless()
-    }, FIRST_BLESS_DELAY_MS)
-  }
-
+  /** First-activation bless: advance the baseline past host startup self-writes. */
   private async firstBless(): Promise<void> {
-    if (!this.engine) return
+    if (!this.active || !this.engine) return
     try {
       await this.engine.bless()
-      await this.refresh()
+      await this.reloadTimeline()
     } catch (err) {
-      this.reportError('Initial baseline bless failed', err)
+      this.fail('settle baseline', err)
     }
   }
 
-  private async doRefresh(): Promise<void> {
-    if (!this.engine) return
-    this.lastStatus = await this.engine.refresh()
-    this.updateViews()
-    this.renderStatusBar()
+  private async runIngest(): Promise<void> {
+    if (!this.active || !this.engine) return
+    try {
+      await this.engine.ingest()
+      await this.reloadTimeline()
+    } catch (err) {
+      this.fail('ingest', err)
+    }
   }
 
-  private onVaultEvent(path: string): void {
-    if (!this.engine) return
-    if (shouldIgnorePath(path, this.reviewFolder)) return
-    this.debouncer?.schedule()
-  }
-
-  private confirmRollback(): void {
-    if (!this.engine) return
-    new ConfirmModal(this.app, {
-      title: 'Roll back to baseline?',
-      body: 'This restores every file in the vault to the last blessed baseline and discards all pending changes. This cannot be undone from here.',
-      cta: 'Roll back',
-      onConfirm: () => {
-        void this.rollback()
-      },
-    }).open()
-  }
-
-  private async activateView(): Promise<void> {
-    const { workspace } = this.app
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_REVIEW)
-    if (existing.length > 0 && existing[0]) {
-      workspace.revealLeaf(existing[0])
+  /** Run a mutating engine action, then reload + re-render. */
+  private async run(
+    label: string,
+    fn: (engine: ReviewEngine) => Promise<void>,
+  ): Promise<void> {
+    if (!this.active || !this.engine) {
+      new Notice('Activate reviewing on this device first.')
       return
     }
-    const leaf = workspace.getLeaf(true) // a new main-area tab (vault-wide review)
-    await leaf.setViewState({ type: VIEW_TYPE_REVIEW, active: true })
-    workspace.revealLeaf(leaf)
+    try {
+      await fn(this.engine)
+      await this.reloadTimeline()
+    } catch (err) {
+      this.fail(label, err)
+    }
+  }
+
+  /** Recompute the timeline + peer presence and re-render every open panel. */
+  private async reloadTimeline(): Promise<void> {
+    if (!this.engine || !this.config) return
+    this.timeline = await this.engine.timeline()
+    this.peers = await this.loadPeers()
+    this.updateViews()
+  }
+
+  /** Read peer device-state files for the header presence summary. */
+  private async loadPeers(): Promise<PanelData['peers']> {
+    if (!this.config || !this.fs) return null
+    try {
+      const syncDir = syncDirPath(
+        this.config.vaultPath,
+        this.config.reviewFolder,
+      )
+      // Read through the engine's worktree fs (node:fs on desktop, the vault
+      // adapter on mobile) — the synced signals live in the working tree.
+      const states = await readDeviceStates(this.fs, syncDir)
+      if (states.length === 0) return null
+      const updatedAt = states
+        .map((s) => s.updatedAt)
+        .sort()
+        .at(-1)
+      return { count: states.length, updatedAt: updatedAt ?? null }
+    } catch {
+      return null
+    }
   }
 
   private updateViews(): void {
+    this.renderStatusBar()
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW)) {
       const view = leaf.view
       if (view instanceof ReviewView) view.update()
     }
   }
 
+  /** Reflect activation + pending count in the clickable status-bar item. */
   private renderStatusBar(): void {
     if (!this.statusBarEl) return
-    if (this.activationState === 'inactive') {
+    if (!this.active) {
       this.statusBarEl.setText('OG: inactive')
       return
     }
-    const status = this.lastStatus
-    if (!status) {
+    if (!this.timeline) {
       this.statusBarEl.setText('OG: —')
       return
     }
-    const n = status.changes.length
-    this.statusBarEl.setText(status.clean ? 'OG: clean' : `OG: ${n} pending`)
+    const n = this.timeline.current.length
+    this.statusBarEl.setText(n === 0 ? 'OG: clean' : `OG: ${n} pending`)
   }
 
-  private reportError(context: string, err: unknown): void {
+  private async openPanel(): Promise<void> {
+    const { workspace } = this.app
+    let leaf: WorkspaceLeaf | undefined =
+      workspace.getLeavesOfType(VIEW_TYPE_REVIEW)[0]
+    if (!leaf) {
+      leaf = workspace.getLeaf(true)
+      await leaf.setViewState({ type: VIEW_TYPE_REVIEW, active: true })
+    }
+    await workspace.revealLeaf(leaf)
+  }
+
+  private async loadSettings(): Promise<void> {
+    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) }
+  }
+
+  private fail(action: string, err: unknown): void {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`[obsidian-guardian] ${context}:`, err)
-    new Notice(`Obsidian Guardian: ${context} — ${message}`)
+    new Notice(`Obsidian Guardian: failed to ${action} — ${message}`)
+    console.error(`[obsidian-guardian] ${action} failed:`, err)
   }
 }

@@ -1,105 +1,91 @@
-import { type App, type Plugin, PluginSettingTab, Setting } from 'obsidian'
+import { type Plugin, PluginSettingTab, Setting } from 'obsidian'
 import type { PluginSettings } from './config'
 
-/** What the settings tab needs from the plugin. */
-export interface GuardianSettingsHost {
+/** Host the plugin must satisfy for the settings tab (avoids importing main.ts). */
+export interface SettingsHost {
   settings: PluginSettings
-  /** Persist the current settings (cheap; called on every edit). */
-  saveSettings(): Promise<void>
-  /** Rebuild the engine + refresh from the current settings (called on close). */
-  reinit(): Promise<void>
+  /** Persist settings and rebuild the engine with the new config. */
+  saveAndReload(): Promise<void>
 }
 
-/** Settings tab: configure ignores, marker, author, review folder, and gitDir. */
+/**
+ * The plugin's settings tab. Edits the persisted {@link PluginSettings}; on
+ * `hide()` (panel closed) it persists and rebuilds the engine so changes to
+ * paths/ignores/author take effect without a reload.
+ */
 export class GuardianSettingTab extends PluginSettingTab {
-  private readonly host: GuardianSettingsHost
+  private readonly host: SettingsHost
 
-  constructor(app: App, plugin: Plugin & GuardianSettingsHost) {
-    super(app, plugin)
+  constructor(plugin: Plugin & SettingsHost) {
+    super(plugin.app, plugin)
     this.host = plugin
   }
 
   display(): void {
     const { containerEl } = this
-    const { settings } = this.host
     containerEl.empty()
+    const s = this.host.settings
 
-    const persist = (mutate: () => void): void => {
-      mutate()
-      void this.host.saveSettings()
-    }
+    new Setting(containerEl)
+      .setName('Git database folder')
+      .setDesc(
+        'Where the device-local git history lives. Must be OUTSIDE the vault (it must never sync). Empty = a per-machine app-data folder.',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('(app-data default)')
+          .setValue(s.gitDir)
+          .onChange((v) => {
+            s.gitDir = v
+          }),
+      )
 
     new Setting(containerEl)
       .setName('Review folder')
-      .setDesc(
-        'Vault-relative folder for the generated changes note. Git-ignored, sync-synced.',
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder('_OG')
-          .setValue(settings.reviewFolder)
-          .onChange((value) => persist(() => (settings.reviewFolder = value))),
+      .setDesc('Vault-relative folder for sync signals (git-ignored).')
+      .addText((t) =>
+        t.setValue(s.reviewFolder).onChange((v) => {
+          s.reviewFolder = v
+        }),
       )
 
     new Setting(containerEl)
       .setName('Baseline marker')
-      .setDesc(
-        'Branch name used as the advanceable "last blessed state" marker.',
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder('baseline')
-          .setValue(settings.markerRef)
-          .onChange((value) => persist(() => (settings.markerRef = value))),
-      )
-
-    new Setting(containerEl)
-      .setName('Git database path')
-      .setDesc(
-        'Where the git history lives — must be OUTSIDE the vault. Leave empty to use a per-vault folder under your OS app-data.',
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder('auto (app-data)')
-          .setValue(settings.gitDir)
-          .onChange((value) => persist(() => (settings.gitDir = value))),
+      .setDesc('Branch name used as the advanceable "last blessed" marker.')
+      .addText((t) =>
+        t.setValue(s.markerRef).onChange((v) => {
+          s.markerRef = v
+        }),
       )
 
     new Setting(containerEl)
       .setName('Extra ignore globs')
       .setDesc(
-        'One glob per line (or comma-separated), appended to the managed ignore list.',
+        'One per line (or comma-separated). Added to the managed ignores.',
       )
-      .addTextArea((area) =>
-        area
-          .setPlaceholder('drafts/\n*.tmp')
-          .setValue(settings.ignore)
-          .onChange((value) => persist(() => (settings.ignore = value))),
-      )
-
-    new Setting(containerEl)
-      .setName('Commit author name')
-      .setDesc(
-        'Recorded when the baseline is blessed. Leave empty for the default.',
-      )
-      .addText((text) =>
-        text
-          .setValue(settings.authorName)
-          .onChange((value) => persist(() => (settings.authorName = value))),
+      .addTextArea((t) =>
+        t.setValue(s.ignore).onChange((v) => {
+          s.ignore = v
+        }),
       )
 
     new Setting(containerEl)
-      .setName('Commit author email')
-      .addText((text) =>
-        text
-          .setValue(settings.authorEmail)
-          .onChange((value) => persist(() => (settings.authorEmail = value))),
+      .setName('Bless author name')
+      .setDesc('Recorded on baseline commits. Empty = engine default.')
+      .addText((t) =>
+        t.setValue(s.authorName).onChange((v) => {
+          s.authorName = v
+        }),
       )
+
+    new Setting(containerEl).setName('Bless author email').addText((t) =>
+      t.setValue(s.authorEmail).onChange((v) => {
+        s.authorEmail = v
+      }),
+    )
   }
 
   override hide(): void {
-    // Rebuild the engine once, when the user leaves the settings tab, rather
-    // than on every keystroke.
-    void this.host.reinit()
+    void this.host.saveAndReload()
   }
 }

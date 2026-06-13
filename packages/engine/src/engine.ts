@@ -1,50 +1,64 @@
-import * as fs from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import ignore, { type Ignore } from 'ignore'
-import { renderChangesFile } from './changes-file'
+import type { PromiseFsClient } from 'isomorphic-git'
 import {
   DEFAULT_AUTHOR,
   DEFAULT_IGNORE,
   DEFAULT_MARKER,
   DEFAULT_REVIEW_FOLDER,
+  FRESHNESS_WINDOW_MS,
 } from './defaults'
-import { decode, isBinary, lineStats } from './diff-stats'
+import { decode, isBinary, lineDiff, lineStats } from './diff-stats'
+import { ensureDir } from './fs-utils'
 import {
   add,
   commit,
-  commitIndex,
+  commitDetachedTree,
   commitTree,
+  type FlatEntry,
   type GitCtx,
+  hashBlob,
   init,
+  listCheckpointRefs,
   type RawChange,
+  rawChangesBetween,
   readCommitTime,
+  readFlatTree,
   readMarkerBlob,
   readTreeOid,
   remove,
   resolveRef,
+  scanWorkdirHashes,
   walkChanges,
+  writeBlob,
+  writeFlatTree,
   writeRef,
   writeTag,
 } from './git-ops'
+import { readLocalState, writeLocalState } from './local-state'
+import { readOrCreateReplicaId } from './replica-id'
 import {
-  changesFileName,
-  changesFilePrefix,
-  readOrCreateReplicaId,
-  reviewNoteName,
-} from './replica-id'
-import { renderReviewNote } from './review-note'
+  readBlessRecords,
+  syncDirPath,
+  writeBlessRecord,
+  writeDeviceState,
+} from './signal-store'
+import { nextSeq, readSeq } from './state'
 import {
-  nextSeq,
-  readBlessHighWater,
-  readSeq,
-  writeBlessHighWater,
-} from './state'
-import type {
-  Author,
-  ChangeEntry,
-  EngineConfig,
-  SnapshotStatus,
-  Status,
+  type ApplyResult,
+  type Author,
+  type BlessRecord,
+  type ChangeEntry,
+  type Checkpoint,
+  DELETED,
+  type DeviceState,
+  type EngineConfig,
+  type FileDiff,
+  type LocalState,
+  type Manifest,
+  type Status,
+  type Timeline,
+  type TimelineEntry,
 } from './types'
 
 const MANAGED_BEGIN = '# >>> obsidian-guardian managed >>>'
@@ -75,6 +89,7 @@ function upsertManagedBlock(existing: string, lines: string[]): string {
  * `fs` and isomorphic-git only (never Obsidian).
  */
 export class ReviewEngine {
+  private readonly fs: PromiseFsClient
   private readonly vaultPath: string
   private readonly gitDir: string
   private readonly reviewFolder: string
@@ -84,9 +99,16 @@ export class ReviewEngine {
   private readonly matcher: Ignore
   private readonly configReplicaId: string | undefined
   private resolvedReplicaId: string | undefined
-  private resolvedReviewNoteName: string | undefined
+  /**
+   * Incremental working-tree content index (`path → blob oid`), primed lazily by
+   * a full scan and then maintained per-path via {@link touch}. `null` = not
+   * primed (next read re-scans). The hot path (edit → refresh) re-hashes only the
+   * touched path instead of the whole vault — mandatory for large/mobile vaults.
+   */
+  private workIndex: Map<string, string> | null = null
 
   constructor(config: EngineConfig) {
+    this.fs = config.fs
     this.vaultPath = config.vaultPath
     this.gitDir = config.gitDir
     this.reviewFolder = config.reviewFolder ?? DEFAULT_REVIEW_FOLDER
@@ -102,54 +124,30 @@ export class ReviewEngine {
   }
 
   private get ctx(): GitCtx {
-    return { dir: this.vaultPath, gitdir: this.gitDir, ref: this.markerRef }
+    return {
+      fs: this.fs,
+      dir: this.vaultPath,
+      gitdir: this.gitDir,
+      ref: this.markerRef,
+    }
   }
 
-  private get vaultName(): string {
-    return basename(this.vaultPath)
+  /** Absolute path of the synced signal folder (`<reviewFolder>/sync/`). */
+  private get syncDir(): string {
+    return syncDirPath(this.vaultPath, this.reviewFolder)
   }
 
   private isIgnored = (path: string): boolean =>
     path.length > 0 && this.matcher.ignores(path)
 
-  /**
-   * Filename of the generated review note for this replica: `changes-<hash>.md`,
-   * derived from a per-gitDir id. Valid after {@link onboard} (or the first
-   * {@link refresh}); throws if read before the id has been resolved.
-   */
-  get reviewNoteName(): string {
-    if (this.resolvedReviewNoteName === undefined) {
-      throw new Error('reviewNoteName is available after onboard()')
-    }
-    return this.resolvedReviewNoteName
-  }
-
   /** Resolve (once) and cache this replica's id. */
   private async ensureReplicaId(): Promise<string> {
     if (this.resolvedReplicaId === undefined) {
       this.resolvedReplicaId =
-        this.configReplicaId ?? (await readOrCreateReplicaId(this.gitDir))
+        this.configReplicaId ??
+        (await readOrCreateReplicaId(this.fs, this.gitDir))
     }
     return this.resolvedReplicaId
-  }
-
-  /** Resolve (once) and cache this replica's review-note filename. */
-  private async ensureReviewNoteName(): Promise<string> {
-    if (this.resolvedReviewNoteName === undefined) {
-      this.resolvedReviewNoteName = reviewNoteName(await this.ensureReplicaId())
-    }
-    return this.resolvedReviewNoteName
-  }
-
-  /**
-   * Filename prefix shared by this replica's rotating signal files. Valid after
-   * {@link onboard}. A watcher matches this to act only on its own files.
-   */
-  get signalPrefix(): string {
-    if (this.resolvedReplicaId === undefined) {
-      throw new Error('signalPrefix is available after onboard()')
-    }
-    return changesFilePrefix(this.resolvedReplicaId)
   }
 
   /**
@@ -165,13 +163,11 @@ export class ReviewEngine {
   async onboard(): Promise<boolean> {
     const existing = await resolveRef(this.ctx)
     if (existing) {
-      this.seedExclude()
-      await this.ensureReviewNoteName()
+      await this.seedExclude()
       return false
     }
     await init(this.ctx)
-    this.seedExclude()
-    await this.ensureReviewNoteName()
+    await this.seedExclude()
     // Empty commit first so the marker resolves, then capture current state.
     await commit(this.ctx, this.author, 'chore: initialize baseline')
     await this.commitAll('chore: baseline')
@@ -200,19 +196,203 @@ export class ReviewEngine {
     }
   }
 
-  /** Compute status and (re)write the review note. Returns the status. */
-  async refresh(): Promise<Status> {
-    const status = await this.status()
-    const dir = join(this.vaultPath, this.reviewFolder)
-    fs.mkdirSync(dir, { recursive: true })
-    const name = await this.ensureReviewNoteName()
-    fs.writeFileSync(join(dir, name), renderReviewNote(status, this.vaultName))
-    return status
+  /**
+   * Approve the current working tree: build a **delta manifest** (the paths
+   * changed since baseline, as absolute content hashes plus {@link DELETED}
+   * tombstones), advance our own baseline through {@link applyBless}, and record
+   * the bless in local state. Returns the {@link BlessRecord} so the adapter can
+   * publish it to the synced signal folder (see the coordination layer).
+   *
+   * Crash-safe ordering: the baseline ref move (atomic) happens before we persist
+   * `blessSeq`; a crash between the two is recoverable by re-deriving the record
+   * from `baseline`'s parent→baseline diff on the next ingest.
+   */
+  async bless(): Promise<BlessRecord> {
+    const self = await this.ensureReplicaId()
+    const changes = await walkChanges(this.ctx, this.isIgnored)
+    const manifest: Manifest = changes.map((c) => ({
+      path: c.path,
+      hash: c.workdirOid === null ? DELETED : c.workdirOid,
+    }))
+    const state = await readLocalState(this.fs, this.gitDir, self)
+    const rec: BlessRecord = {
+      client: self,
+      seq: state.blessSeq + 1,
+      manifest,
+      blessedAt: new Date().toISOString(),
+    }
+    // applyBless advances our baseline and preserves the previous baseline as a
+    // restorable checkpoint (so a bless can be undone to the prior blessed state).
+    await this.applyBless(rec)
+    // The manifest came from the authoritative full walk; drop the incremental
+    // index so the next read re-primes from disk (no phantom diff if an edit
+    // event was ever missed). bless is user-initiated and rare — one rescan is fine.
+    this.workIndex = null
+    state.blessSeq = rec.seq
+    state.observedSeq[self] = rec.seq
+    await writeLocalState(this.fs, this.gitDir, state)
+    // Publish last: the baseline ref move (in applyBless) is the durable commit
+    // point; the signal file is derivable from it, so a crash before this line
+    // is recoverable on the next ingest.
+    await writeBlessRecord(this.fs, this.syncDir, rec)
+    await this.publishDeviceState(state)
+    return rec
   }
 
-  /** Advance the baseline marker to the current state. */
-  async bless(): Promise<void> {
-    await this.commitAll('chore: bless baseline')
+  /**
+   * The core convergence rule: apply a bless record **per file, content-gated**.
+   * For each manifest entry, advance the baseline for that path **only if** this
+   * device's own (synced) working tree already hashes to the blessed value (or,
+   * for {@link DELETED}, the path is already absent). That single content gate is
+   * simultaneously the arrival gate (bytes not synced yet), the causal cut (a
+   * newer local edit won't match an older blessed hash), and the conflict
+   * resolver (only the bless matching current content admits) — so the fold is
+   * idempotent, commutative, and convergent with no vector clock.
+   *
+   * Builds a new baseline tree (old baseline overlaid with the admitted paths'
+   * blobs) and moves the `baseline` ref in one atomic commit. The working tree is
+   * never touched. Returns whether the baseline advanced and whether any entries
+   * are still gated (to retry on a later ingest).
+   */
+  async applyBless(rec: BlessRecord): Promise<ApplyResult> {
+    const baselineCommit = await resolveRef(this.ctx)
+    const entries: Map<string, FlatEntry> = baselineCommit
+      ? await readFlatTree(
+          this.ctx,
+          await readTreeOid(this.ctx, baselineCommit),
+        )
+      : new Map()
+
+    let changed = false
+    let stillPending = false
+    for (const entry of rec.manifest) {
+      if (entry.hash === DELETED) {
+        // Content gate (delete): the bytes must already be gone locally.
+        if ((await this.readWorkdir(entry.path)) !== null) {
+          stillPending = true
+          continue
+        }
+        if (entries.delete(entry.path)) changed = true
+      } else {
+        const bytes = await this.readWorkdir(entry.path)
+        // Content gate (set): local bytes must hash to the blessed value.
+        if (!bytes || (await hashBlob(bytes)) !== entry.hash) {
+          stillPending = true
+          continue
+        }
+        const oid = await writeBlob(this.ctx, bytes)
+        const prev = entries.get(entry.path)
+        if (!prev || prev.oid !== oid) {
+          entries.set(entry.path, { oid, mode: prev?.mode ?? '100644' })
+          changed = true
+        }
+      }
+    }
+
+    if (changed) {
+      const newTree = await writeFlatTree(this.ctx, entries)
+      await commitTree(
+        this.ctx,
+        this.author,
+        `bless: apply ${rec.client.slice(0, 8)}:${rec.seq}`,
+        newTree,
+        baselineCommit ? [baselineCommit] : [],
+      )
+      // Preserve the pre-bless baseline as a restorable checkpoint so the bless
+      // can be undone — on the device that blessed AND on every device that later
+      // applies it via ingest()/recover(). Only when an existing baseline moved
+      // (the first-ever baseline has no predecessor to keep).
+      if (baselineCommit) {
+        const seq = await nextSeq(this.fs, this.gitDir)
+        await writeRef(
+          this.ctx,
+          `refs/og/checkpoints/${pad(seq)}`,
+          baselineCommit,
+        )
+      }
+    }
+    return { changed, stillPending }
+  }
+
+  /**
+   * Ingest peers' synced bless records (call on a debounced sync-settle). Folds
+   * **fresh** records (seq above our per-client high-water mark) together with
+   * still-`pending` ones through {@link applyBless}, drops stale/superseded
+   * records (the freshness window + seq dedup), retains the still-gated, and
+   * republishes our {@link DeviceState}. Idempotent: re-running converges.
+   * Returns whether our baseline advanced this pass.
+   */
+  async ingest(): Promise<{ changed: boolean }> {
+    const self = await this.ensureReplicaId()
+    const state = await readLocalState(this.fs, this.gitDir, self)
+    const records = await readBlessRecords(this.fs, this.syncDir)
+
+    const fresh: BlessRecord[] = []
+    for (const rec of records) {
+      if (rec.client === self) continue // our own bless is already applied
+      const seen = state.observedSeq[rec.client] ?? 0
+      if (rec.seq > seen) {
+        fresh.push(rec)
+        state.observedSeq[rec.client] = rec.seq
+      }
+    }
+
+    let changed = false
+    const retained = new Map<string, BlessRecord>() // by client → highest seq
+    for (const rec of [...fresh, ...state.pending]) {
+      if (this.isStale(rec, state)) continue
+      const res = await this.applyBless(rec)
+      if (res.changed) changed = true
+      if (res.stillPending) {
+        const prev = retained.get(rec.client)
+        if (!prev || rec.seq > prev.seq) retained.set(rec.client, rec)
+      }
+    }
+    state.pending = [...retained.values()]
+    await writeLocalState(this.fs, this.gitDir, state)
+    // Republish our DeviceState only when ingest actually advanced something —
+    // a peer bless applied (`changed`) or a newly observed peer seq (`fresh`).
+    // A no-op ingest must NOT write: `publishDeviceState` writes
+    // `device-<id>.json` *inside the synced vault*, so a host file-watcher picks
+    // it up and fires another ingest — an infinite republish loop (one rewrite
+    // every debounce interval, forever). Gating the write breaks that loop.
+    if (changed || fresh.length > 0) await this.publishDeviceState(state)
+    return { changed }
+  }
+
+  /**
+   * Crash / re-bootstrap recovery (call once on startup). Re-applies **every**
+   * synced bless record unconditionally — `applyBless` is idempotent, so this
+   * converges regardless of where a prior crash landed, and reconstructs the
+   * baseline on a device whose local object store was lost (only unblessed
+   * checkpoint history is unrecoverable). Then runs a normal {@link ingest} to
+   * refresh bookkeeping and republish device state.
+   */
+  async recover(): Promise<void> {
+    for (const rec of await readBlessRecords(this.fs, this.syncDir)) {
+      await this.applyBless(rec)
+    }
+    await this.ingest()
+  }
+
+  /** A bless is stale if a newer one from the same client won, or it has aged out. */
+  private isStale(rec: BlessRecord, state: LocalState): boolean {
+    if (rec.seq < (state.observedSeq[rec.client] ?? 0)) return true
+    const age = Date.now() - Date.parse(rec.blessedAt)
+    return Number.isFinite(age) && age > FRESHNESS_WINDOW_MS
+  }
+
+  /** Publish this device's presence/housekeeping state to the synced folder. */
+  private async publishDeviceState(state: LocalState): Promise<void> {
+    const baseline = await resolveRef(this.ctx)
+    const ds: DeviceState = {
+      client: state.self,
+      head: await readSeq(this.fs, this.gitDir),
+      observedSeq: state.observedSeq,
+      updatedAt: new Date().toISOString(),
+    }
+    if (baseline) ds.baselineDigest = await readTreeOid(this.ctx, baseline)
+    await writeDeviceState(this.fs, this.syncDir, ds)
   }
 
   /**
@@ -231,93 +411,123 @@ export class ReviewEngine {
     if (changes.length === 0) {
       return {
         oid: baseline ?? '',
-        seq: await readSeq(this.gitDir),
+        seq: await readSeq(this.fs, this.gitDir),
         created: false,
       }
     }
+    // Build the working tree's tree content-addressed (baseline ⊕ pending), so the
+    // checkpoint's tree is byte-exact with the working tree. The git index is NOT
+    // used: a prior bless advances the baseline via commitTree without updating the
+    // index, so committing the index could capture a stale tree (the cause of the
+    // "diff shows changes right after checkpointing" bug).
+    const entries = baseline
+      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, baseline))
+      : new Map<string, FlatEntry>()
     for (const change of changes) {
-      if (change.workdirOid === null) await remove(this.ctx, change.path)
-      else await add(this.ctx, change.path)
+      if (change.workdirOid === null) {
+        entries.delete(change.path)
+        continue
+      }
+      const bytes = await this.readWorkdir(change.path)
+      if (bytes === null) continue
+      const oid = await writeBlob(this.ctx, bytes)
+      const prev = entries.get(change.path)
+      entries.set(change.path, { oid, mode: prev?.mode ?? '100644' })
     }
-    const oid = await commitIndex(
+    const tree = await writeFlatTree(this.ctx, entries)
+    // Dedup: never create a checkpoint identical to the most recent one (repeated
+    // clicks with no edits in between must not pile up duplicate snapshots).
+    const [latest] = await this.listCheckpoints()
+    if (latest && latest.tree === tree) {
+      return { oid: latest.oid, seq: latest.seq, created: false }
+    }
+    const oid = await commitDetachedTree(
       this.ctx,
       this.author,
       'checkpoint: snapshot',
+      tree,
       baseline ? [baseline] : [],
     )
-    const seq = await nextSeq(this.gitDir)
+    const seq = await nextSeq(this.fs, this.gitDir)
     await writeRef(this.ctx, `refs/og/checkpoints/${pad(seq)}`, oid)
     return { oid, seq, created: true }
   }
 
   /**
-   * Bless a pinned snapshot: advance the baseline to the snapshot commit's tree,
-   * iff `seq` is strictly greater than the locally-persisted high-water mark.
-   * Otherwise a no-op (returns false) — this is what makes the signal
-   * order-independent and idempotent: stale/duplicate/reordered signals (a lower
-   * or equal seq) can never regress the baseline. The working tree is untouched;
-   * any changes after the snapshot remain pending.
+   * List this device's checkpoints (the `refs/og/checkpoints/*` snapshot commits),
+   * newest seq first. Device-local and never synced; cheap (refs + commit times,
+   * no diffing). For per-checkpoint diffs use {@link timeline}.
    */
-  async blessSnapshot(oid: string, seq: number): Promise<boolean> {
-    if (seq <= (await readBlessHighWater(this.gitDir))) return false
-    const tree = await readTreeOid(this.ctx, oid)
-    const baseline = await resolveRef(this.ctx)
-    await commitTree(
-      this.ctx,
-      this.author,
-      `chore: bless snapshot ${oid.slice(0, 8)}`,
-      tree,
-      baseline ? [baseline] : [],
-    )
-    await writeBlessHighWater(this.gitDir, seq)
-    return true
+  async listCheckpoints(): Promise<Checkpoint[]> {
+    const leaves = await listCheckpointRefs(this.ctx)
+    const out: Checkpoint[] = []
+    for (const leaf of leaves) {
+      const oid = await resolveRef(this.ctx, `refs/og/checkpoints/${leaf}`)
+      if (!oid) continue
+      out.push({
+        oid,
+        tree: await readTreeOid(this.ctx, oid),
+        seq: Number(leaf),
+        when: await readCommitTime(this.ctx, oid),
+      })
+    }
+    out.sort((a, b) => b.seq - a.seq)
+    return out
   }
 
   /**
-   * Snapshot the current tree and return a {@link SnapshotStatus}: the pinned
-   * snapshot oid + seq, the current baseline (and when it was set), and the net
-   * change list from baseline to the snapshot. The adapter renders this into a
-   * rotating, immutable signal file; `accepted: true` synced back targets
-   * {@link blessSnapshot}.
+   * The full review timeline for the panel: the live `current` diff
+   * (baseline→working tree), the `baseline` marker (oid + time), and every
+   * device-local checkpoint (newest seq first) carrying its own diff to the
+   * working tree (what restoring it would change). Pure read; no mutation.
    */
-  async snapshot(): Promise<SnapshotStatus> {
-    const { oid, seq } = await this.checkpoint()
-    const changes = await this.buildChanges()
-    changes.sort((a, b) => a.path.localeCompare(b.path))
+  async timeline(): Promise<Timeline> {
     const baseline = await resolveRef(this.ctx)
+    const current = await this.buildChanges()
+    current.sort((a, b) => a.path.localeCompare(b.path))
+    const checkpoints: TimelineEntry[] = []
+    for (const cp of await this.listCheckpoints()) {
+      const changes = await this.buildChanges(cp.oid)
+      changes.sort((a, b) => a.path.localeCompare(b.path))
+      checkpoints.push({ ...cp, changes })
+    }
     return {
-      snapshot: oid,
-      seq,
-      baseline,
-      baselineAt: baseline ? await readCommitTime(this.ctx, baseline) : null,
-      generatedAt: new Date().toISOString(),
-      clean: changes.length === 0,
-      changes,
+      baseline: {
+        oid: baseline,
+        when: baseline ? await readCommitTime(this.ctx, baseline) : null,
+        tree: baseline ? await readTreeOid(this.ctx, baseline) : null,
+      },
+      current,
+      checkpoints,
     }
   }
 
   /**
-   * Snapshot the current tree and write its rotating, immutable signal file
-   * (`<reviewFolder>/changes-<replica>-<snap8>.md`). Returns the status, the
-   * filename written, and the exact bytes written (so a watcher can record a
-   * self-write hash and not react to its own output). Does not delete superseded
-   * files — retention is the adapter's concern.
+   * Compute the expandable line diff for one path, between a base ref (default:
+   * the baseline marker; pass a checkpoint oid for a checkpoint row) and the
+   * current working tree. By default the diff runs `fromRef → working tree` (what
+   * changed since that snapshot). Pass `reverse: true` for the *restore* direction
+   * — `working tree → fromRef` (what restoring that snapshot would apply) — used
+   * by the History entries. Reads only this one file pair (cheap; lazy on expand).
+   * Binary files return `{ binary: true, lines: [] }`.
    */
-  async writeSnapshot(): Promise<{
-    status: SnapshotStatus
-    fileName: string
-    content: string
-  }> {
-    const status = await this.snapshot()
-    const fileName = changesFileName(
-      await this.ensureReplicaId(),
-      status.snapshot,
-    )
-    const content = renderChangesFile(status, this.vaultName)
-    const dir = join(this.vaultPath, this.reviewFolder)
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(join(dir, fileName), content)
-    return { status, fileName, content }
+  async fileDiff(
+    path: string,
+    fromRef: string = this.markerRef,
+    reverse = false,
+  ): Promise<FileDiff> {
+    const before = await readMarkerBlob(this.ctx, path, fromRef)
+    const after = await this.readWorkdir(path)
+    const refBytes = before?.blob ?? new Uint8Array()
+    const workBytes = after ?? new Uint8Array()
+    if (isBinary(refBytes) || isBinary(workBytes))
+      return { binary: true, lines: [] }
+    const ref = decode(refBytes)
+    const work = decode(workBytes)
+    return {
+      binary: false,
+      lines: reverse ? lineDiff(work, ref) : lineDiff(ref, work),
+    }
   }
 
   /** Restore a single path from the baseline (or delete it if newly added). */
@@ -330,6 +540,19 @@ export class ReviewEngine {
     const changes = await walkChanges(this.ctx, this.isIgnored)
     for (const change of changes) {
       await this.restore(change.path)
+    }
+  }
+
+  /**
+   * Restore the whole work-tree to a checkpoint commit (by oid). Like
+   * {@link rollback} but targeting an arbitrary device-local snapshot instead of
+   * the baseline; the baseline marker is untouched, so any net difference between
+   * the checkpoint and the baseline remains pending afterward.
+   */
+  async restoreCheckpoint(oid: string): Promise<void> {
+    const changes = await walkChanges(this.ctx, this.isIgnored, oid)
+    for (const change of changes) {
+      await this.restore(change.path, oid)
     }
   }
 
@@ -348,39 +571,122 @@ export class ReviewEngine {
     await commit(this.ctx, this.author, message)
   }
 
-  /** Restore one path's content from the marker, keeping the index in sync. */
-  private async restore(path: string): Promise<void> {
+  /**
+   * Restore one path's content from a commit (default: the baseline marker),
+   * keeping the index in sync. Writing the baseline bytes directly (not
+   * `git.checkout`) avoids isomorphic-git's stat-skip.
+   */
+  private async restore(
+    path: string,
+    fromRef: string = this.markerRef,
+  ): Promise<void> {
     const abs = join(this.vaultPath, path)
-    const blob = await readMarkerBlob(this.ctx, path)
+    const blob = await readMarkerBlob(this.ctx, path, fromRef)
     if (blob) {
-      await fs.promises.mkdir(dirname(abs), { recursive: true })
-      await fs.promises.writeFile(abs, blob.blob)
+      await ensureDir(this.fs, dirname(abs))
+      await this.fs.promises.writeFile(abs, blob.blob)
       await add(this.ctx, path)
     } else {
-      await fs.promises.rm(abs, { force: true })
+      try {
+        await this.fs.promises.unlink(abs)
+      } catch {
+        // already absent — nothing to remove from the work-tree
+      }
       await remove(this.ctx, path)
     }
+    // Keep the incremental index consistent with the bytes we just wrote/removed.
+    if (this.workIndex !== null) await this.touch(path)
   }
 
-  private seedExclude(): void {
+  /** Raw changes from the primed index against any base ref — no full-tree reads. */
+  private async rawChangesFromIndex(
+    index: Map<string, string>,
+    fromRef: string,
+  ): Promise<RawChange[]> {
+    const fromCommit = await resolveRef(this.ctx, fromRef)
+    const fromEntries = fromCommit
+      ? await readFlatTree(this.ctx, await readTreeOid(this.ctx, fromCommit))
+      : new Map<string, FlatEntry>()
+    return rawChangesBetween(fromEntries, index)
+  }
+
+  /** The work-index, primed by a full scan on first use; maintained by {@link touch}. */
+  private async ensureIndex(): Promise<Map<string, string>> {
+    if (this.workIndex === null) {
+      this.workIndex = await scanWorkdirHashes(this.ctx, this.isIgnored)
+    }
+    return this.workIndex
+  }
+
+  /**
+   * Record a single path's current content into the incremental index (re-hash
+   * it, or drop it if gone). Adapters call this on each vault edit event so the
+   * next {@link status}/{@link timeline} re-hashes only the touched path, never
+   * the whole tree. The first touch primes the index with one full scan; after
+   * that the engine trusts touch()/{@link rescan} to keep it current (the caller
+   * owns routing every edit through one of them).
+   */
+  async touch(path: string): Promise<void> {
+    if (this.isIgnored(path)) return
+    const index = await this.ensureIndex()
+    const bytes = await this.readWorkdir(path)
+    if (bytes === null) index.delete(path)
+    else index.set(path, await hashBlob(bytes))
+  }
+
+  /**
+   * Discard the incremental index and rebuild it from a full disk scan — the
+   * reconciliation path for any edits the adapter's events may have missed (e.g.
+   * external sync writes). The authoritative, slow path; wire it to an explicit
+   * "Refresh".
+   */
+  async rescan(): Promise<void> {
+    this.workIndex = await scanWorkdirHashes(this.ctx, this.isIgnored)
+  }
+
+  private async seedExclude(): Promise<void> {
     const infoDir = join(this.gitDir, 'info')
-    fs.mkdirSync(infoDir, { recursive: true })
+    await ensureDir(this.fs, infoDir)
     const file = join(infoDir, 'exclude')
-    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
-    fs.writeFileSync(file, upsertManagedBlock(existing, this.ignoreGlobs))
+    let existing = ''
+    try {
+      existing = (await this.fs.promises.readFile(file, 'utf8')) as string
+    } catch {
+      existing = ''
+    }
+    await this.fs.promises.writeFile(
+      file,
+      upsertManagedBlock(existing, this.ignoreGlobs),
+    )
   }
 
   private async readWorkdir(path: string): Promise<Uint8Array | null> {
     try {
-      return await fs.promises.readFile(join(this.vaultPath, path))
+      return (await this.fs.promises.readFile(
+        join(this.vaultPath, path),
+      )) as Uint8Array
     } catch {
       return null
     }
   }
 
-  /** Build the change list, including exact-content rename detection. */
-  private async buildChanges(): Promise<ChangeEntry[]> {
-    const raw = await walkChanges(this.ctx, this.isIgnored)
+  /**
+   * Build the change list (with exact-content rename detection) from a base ref
+   * to the working tree. `fromRef` defaults to the baseline marker; pass a
+   * checkpoint oid to diff against an arbitrary snapshot.
+   */
+  private async buildChanges(
+    fromRef: string = this.markerRef,
+  ): Promise<ChangeEntry[]> {
+    // When the incremental index is primed (a live adapter is feeding touch()),
+    // diff it against the base tree with no full-tree reads — only the changed
+    // files are read below (for line stats / rename detection). Otherwise fall
+    // back to the authoritative full disk walk, so a caller that never touches
+    // always sees current disk state.
+    const raw =
+      this.workIndex !== null
+        ? await this.rawChangesFromIndex(this.workIndex, fromRef)
+        : await walkChanges(this.ctx, this.isIgnored, fromRef)
     const adds = raw.filter((c) => c.headOid === null)
     const deletes = raw.filter((c) => c.workdirOid === null)
     const modifies = raw.filter(
@@ -423,7 +729,7 @@ export class ReviewEngine {
 
     for (const change of deletes) {
       if (matched.has(change.path)) continue
-      const before = await readMarkerBlob(this.ctx, change.path)
+      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
       changes.push({
         path: change.path,
         kind: 'delete',
@@ -432,7 +738,7 @@ export class ReviewEngine {
     }
 
     for (const change of modifies) {
-      const before = await readMarkerBlob(this.ctx, change.path)
+      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
       const after = await this.readWorkdir(change.path)
       changes.push({
         path: change.path,

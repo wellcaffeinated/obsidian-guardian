@@ -49,46 +49,43 @@ if ! wait_for 60 plugin_enable_once; then
 fi
 pass "plugin loaded"
 
-log "review is opt-in per machine: assert nothing is written before activation"
-note_written() { ls "$PLUGIN_VAULT"/_OG/changes-*.md >/dev/null 2>&1; }
-sleep 3
-if note_written; then fail "plugin wrote a review note before explicit activation"; fi
-pass "plugin stayed inactive (no review note) until activated"
+# New p2p design: the plugin writes nothing into the vault except the synced
+# signal folder `_OG/sync/` (device-<id>.json + bless-<id>.json), and only after
+# explicit per-device activation. There is no review note — the panel is the UI.
+SYNC_DIR="$PLUGIN_VAULT/_OG/sync"
 
-log "activate review on this machine (explicit per-machine opt-in)"
+log "review is opt-in per device: assert no signal is published before activation"
+device_published() { ls "$SYNC_DIR"/device-*.json >/dev/null 2>&1; }
+sleep 3
+if device_published; then fail "plugin published a device signal before explicit activation"; fi
+pass "plugin stayed inactive (no signal files) until activated"
+
+log "activate review on this device (explicit per-device opt-in)"
 obs eval "code=app.commands.executeCommandById('obsidian-guardian:activate')" >/dev/null 2>&1 || true
 
-log "wait for the engine's initial review note (onboard + refresh after activation)"
-wait_for 30 note_written || fail "review note was not written within 30s"
-NOTE="$(ls "$PLUGIN_VAULT"/_OG/changes-*.md | head -1)"
-pass "review note written: ${NOTE#"$ROOT"/}"
+log "wait for the engine to publish this device's state (onboard + recover)"
+wait_for 30 device_published || fail "device signal not published within 30s"
+pass "device signal published: _OG/sync/device-*.json"
 
 log "wait for the first-activation auto-bless to settle the baseline"
-sleep 5   # the plugin advances the baseline ~3s after a fresh onboard
-note_clean() { grep -Eq 'status: blessed|Nothing pending' "$NOTE"; }
-wait_for 20 note_clean || fail "review did not settle to a clean baseline after first activation"
-pass "first activation settled to a clean baseline (no .obsidian self-noise)"
+sleep 6   # the plugin advances the baseline ~3s after a fresh onboard
+bless_published() { ls "$SYNC_DIR"/bless-*.json >/dev/null 2>&1; }
+wait_for 20 bless_published || fail "no bless record published after first activation"
+pass "first activation published a bless record"
 
 log "open the panel and screenshot it"
 obs eval "code=app.commands.executeCommandById('obsidian-guardian:open-review-panel')" >/dev/null 2>&1 || true
 sleep 1
-obs dev:screenshot path=/vaults/plugin-test/_OG/panel.png >/dev/null 2>&1 || true
-if [ -f "$PLUGIN_VAULT/_OG/panel.png" ]; then
-  pass "panel screenshot captured"
-else
-  log "screenshot not captured (non-fatal)"
-fi
+plugin_screenshot "$ROOT/screenshots/plugin-smoke.png" \
+  && pass "panel screenshot captured" \
+  || log "screenshot not captured (non-fatal)"
 
-log "edit a note → the review reflects it"
+log "edit a note → bless it → the bless manifest names the edited file"
 printf '\n- plugin smoke marker\n' >>"$PLUGIN_VAULT/Ideas.md"
-edit_reflected() { grep -Eq 'Ideas' "$NOTE"; }
-wait_for 30 edit_reflected || fail "edit not reflected in the review note within 30s"
-pass "edit reflected in the review note"
-
-log "bless via the plugin command → review goes clean"
+sleep 1
 obs eval "code=app.commands.executeCommandById('obsidian-guardian:bless')" >/dev/null 2>&1 || true
-blessed() { grep -Eq 'status: blessed|Nothing pending' "$NOTE"; }
-wait_for 30 blessed || fail "review note not refreshed to blessed after bless"
-pass "bless cleared the review"
+edit_blessed() { grep -q 'Ideas.md' "$SYNC_DIR"/bless-*.json 2>/dev/null; }
+wait_for 30 edit_blessed || fail "edited file not present in the bless manifest within 30s"
+pass "edit captured in the bless manifest"
 
 pass "PLUGIN SMOKE PASS"
