@@ -94,16 +94,27 @@ bound for `idb`):
   panel collapses checkpoint rows by default (`openCheckpoints` starts empty).
   Cost grows ~O(N²·churn) blob reads + O(N) `readFlatTree`.
 
-### Perf optimization — revised priority
-- [ ] **Defer per-checkpoint diffs** (high value): `timeline()` should return
-      cheap checkpoint metadata only (oid/seq/when/tree) — or a tree-vs-tree
-      changed-path list with NO blob reads / line counting — and compute the full
-      per-file line diff lazily on row expansion (mirror the already-lazy
-      `fileDiff`). This removes the O(N²) eager blob reads.
-- [ ] **Prime the index once** (small but free win): `ensureIndex()` at the top
-      of `timeline()` so the live diff + checkpoint diffs skip the per-checkpoint
-      full working-tree walk. ~1.3–1.5× on top of the above.
-- [ ] Optionally make startup `recover()` not block first paint.
+### Perf optimization — DONE (commit on this branch)
+- [x] **Defer per-checkpoint diffs** (high value): `timeline()` now ships a CHEAP
+      per-checkpoint summary (kind + paths, no blob reads / line counting); the
+      full per-file stats are fetched lazily on row expand via the new
+      `engine.checkpointDiff(oid)` → `controller.checkpointChanges` → the view
+      caches them and renders a brief "Loading changes…" placeholder. `current`
+      (always shown) stays fully computed.
+- [x] **Prime the index once**: `ensureIndex()` at the top of `timeline()` so the
+      live diff + cheap summaries skip the per-checkpoint full working-tree walk.
+- [ ] Optionally make startup `recover()` not block first paint (still open).
+
+#### Before → after (`pnpm profile:timeline`, 600 files × 24 checkpoints)
+| backend | startup timeline BEFORE | startup timeline AFTER | repeat (warm) | lazy expand (1 cp) |
+|---------|-------------------------|------------------------|---------------|--------------------|
+| node:fs | 2172ms                  | **214ms** (~10×)       | 173ms         | 141ms              |
+| idb     | 3371ms                  | **865ms** (~4×)        | 222ms         | 140ms              |
+
+The remaining `idb` startup cost (865ms) is the one unavoidable full-vault hash
+scan (`ensureIndex`) over LightningFS + one cheap tree read per checkpoint; the
+O((1+N)·M) blob reads are gone. Full per-file stats are paid only when the user
+expands a specific checkpoint (~140ms), not at startup.
 
 ## Verification
 - `pnpm -r test`, `pnpm -r typecheck`, `pnpm lint`, `pnpm knip`, engine+plugin

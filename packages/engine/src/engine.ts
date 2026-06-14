@@ -488,12 +488,21 @@ export class ReviewEngine {
    * working tree (what restoring it would change). Pure read; no mutation.
    */
   async timeline(): Promise<Timeline> {
+    // Prime the work index once up front so the live diff AND every checkpoint
+    // summary resolve against an in-memory hash map instead of each re-walking
+    // and re-hashing the whole working tree (the cold startup was
+    // O((1+N_checkpoints)·M) file reads).
+    await this.ensureIndex()
     const baseline = await resolveRef(this.ctx)
     const current = await this.buildChanges()
     current.sort((a, b) => a.path.localeCompare(b.path))
     const checkpoints: TimelineEntry[] = []
     for (const cp of await this.listCheckpoints()) {
-      const changes = await this.buildChanges(cp.oid)
+      // Cheap summary only (kind + paths, no blob reads / line stats). The panel
+      // collapses checkpoints by default; the full per-file diff is fetched
+      // lazily on expand via checkpointDiff(). This is what keeps startup from
+      // reading every changed blob across every checkpoint.
+      const changes = await this.buildChanges(cp.oid, /* includeStats */ false)
       changes.sort((a, b) => a.path.localeCompare(b.path))
       checkpoints.push({ ...cp, changes })
     }
@@ -506,6 +515,19 @@ export class ReviewEngine {
       current,
       checkpoints,
     }
+  }
+
+  /**
+   * Full per-file change list (with line stats + binary flag) for one
+   * checkpoint → working tree. Heavier than the summary {@link timeline} returns
+   * (it reads each changed blob), so the panel calls it lazily when a checkpoint
+   * row is expanded — keeping startup cheap regardless of checkpoint count.
+   */
+  async checkpointDiff(fromRef: string): Promise<ChangeEntry[]> {
+    await this.ensureIndex()
+    const changes = await this.buildChanges(fromRef, /* includeStats */ true)
+    changes.sort((a, b) => a.path.localeCompare(b.path))
+    return changes
   }
 
   /**
@@ -682,6 +704,7 @@ export class ReviewEngine {
    */
   private async buildChanges(
     fromRef: string = this.markerRef,
+    includeStats = true,
   ): Promise<ChangeEntry[]> {
     // When the incremental index is primed (a live adapter is feeding touch()),
     // diff it against the base tree with no full-tree reads — only the changed
@@ -705,6 +728,12 @@ export class ReviewEngine {
 
     const changes: ChangeEntry[] = []
     const matched = new Set<string>()
+    // A summary row carries kind + paths only; line stats and the binary flag
+    // (which each need a blob read) are filled in only when `includeStats`. The
+    // cheap path is what lets `timeline()` build a change list for EVERY
+    // checkpoint without O((1+N)·changed-files) blob reads — the panel fetches
+    // the full per-file stats lazily on expand via {@link checkpointDiff}.
+    const zero = { added: 0, removed: 0, binary: false }
 
     for (const change of adds) {
       const from =
@@ -713,43 +742,55 @@ export class ReviewEngine {
           : undefined
       if (from && !matched.has(from.path)) {
         matched.add(from.path)
-        const bytes = (await this.readWorkdir(change.path)) ?? new Uint8Array()
+        const binary = includeStats
+          ? isBinary((await this.readWorkdir(change.path)) ?? new Uint8Array())
+          : false
         changes.push({
           path: change.path,
           kind: 'rename',
           renamedFrom: from.path,
           added: 0,
           removed: 0,
-          binary: isBinary(bytes),
+          binary,
         })
-      } else {
+      } else if (includeStats) {
         const after = await this.readWorkdir(change.path)
         changes.push({
           path: change.path,
           kind: 'add',
           ...this.stats(null, after),
         })
+      } else {
+        changes.push({ path: change.path, kind: 'add', ...zero })
       }
     }
 
     for (const change of deletes) {
       if (matched.has(change.path)) continue
-      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
-      changes.push({
-        path: change.path,
-        kind: 'delete',
-        ...this.stats(before?.blob ?? null, null),
-      })
+      if (includeStats) {
+        const before = await readMarkerBlob(this.ctx, change.path, fromRef)
+        changes.push({
+          path: change.path,
+          kind: 'delete',
+          ...this.stats(before?.blob ?? null, null),
+        })
+      } else {
+        changes.push({ path: change.path, kind: 'delete', ...zero })
+      }
     }
 
     for (const change of modifies) {
-      const before = await readMarkerBlob(this.ctx, change.path, fromRef)
-      const after = await this.readWorkdir(change.path)
-      changes.push({
-        path: change.path,
-        kind: 'modify',
-        ...this.stats(before?.blob ?? null, after),
-      })
+      if (includeStats) {
+        const before = await readMarkerBlob(this.ctx, change.path, fromRef)
+        const after = await this.readWorkdir(change.path)
+        changes.push({
+          path: change.path,
+          kind: 'modify',
+          ...this.stats(before?.blob ?? null, after),
+        })
+      } else {
+        changes.push({ path: change.path, kind: 'modify', ...zero })
+      }
     }
 
     return changes

@@ -1,18 +1,20 @@
 // Startup-timeline profiler (NOT a correctness test; skipped unless OG_PROFILE=1).
 //
-// Purpose: quantify why a large vault makes the mobile review panel slow to show
-// state. `timeline()` calls `buildChanges()` for the live diff PLUS once per
-// checkpoint; with the work-index unprimed (the cold startup path) each falls
-// back to `walkChanges`, which reads+hashes EVERY non-ignored file. So cold
-// startup ≈ (1 + N_checkpoints) full vault walks = O((1+N)·M) file reads. Priming
-// the index once (`rescan()`) collapses that to ~one scan + in-memory diffs.
+// Purpose: track the cost of building the review panel's timeline on a large
+// vault. Historically `timeline()` did (1 + N_checkpoints) full vault walks and
+// read every changed blob for every (collapsed) checkpoint — O((1+N)·M). It now
+// (a) primes the work index once and (b) ships only a CHEAP per-checkpoint
+// summary, fetching full per-file stats lazily via `checkpointDiff()` on expand.
 //
 // This run measures, per backend (node:fs and LightningFS/IndexedDB), on a
 // SYNTHETIC vault only:
 //   - onboard
-//   - timeline COLD   (fresh engine, index unprimed) — today's startup cost
-//   - rescan          (prime the index with one full scan)
-//   - timeline WARM   (index primed) — the cost after the proposed fix
+//   - timeline STARTUP   (fresh engine = simulated restart) — the headline cost
+//   - timeline REPEAT    (same engine, index warm) — an in-session refresh
+//   - checkpointDiff      (lazy full diff for ONE expanded checkpoint)
+//
+// Compare STARTUP across commits for before/after. (Pre-optimization numbers are
+// recorded in plans/mobile-refresh-fixes.md.)
 //
 // Run it (resource-bounded) via `scripts/profile-timeline.sh`, or directly:
 //   OG_PROFILE=1 pnpm --filter @obsidian-guardian/engine exec \
@@ -138,15 +140,20 @@ describe.skipIf(!PROFILE)('timeline startup profile (synthetic vault)', () => {
           await churnAndCheckpoint(engine, vault, r, FILES)
         }
 
-        // Simulate a restart: a fresh engine over the persisted store.
-        const cold = remake()
-        const [coldTl, tCold] = await timeAsync(() => cold.timeline())
-        const [, tRescan] = await timeAsync(() => cold.rescan())
-        const [warmTl, tWarm] = await timeAsync(() => cold.timeline())
+        // Simulate a restart: a fresh engine over the persisted store, so the
+        // first timeline() is the real startup cost (index cold, must prime).
+        const startup = remake()
+        const [startTl, tStartup] = await timeAsync(() => startup.timeline())
+        const [repeatTl, tRepeat] = await timeAsync(() => startup.timeline())
+        // Lazy expand of the OLDEST checkpoint (largest diff to the working tree).
+        const oldest = startTl.checkpoints.at(-1)
+        const [, tExpand] = oldest
+          ? await timeAsync(() => startup.checkpointDiff(oldest.oid))
+          : [null, 0]
 
-        // Correctness guard: priming the index must not change the result.
-        expect(warmTl.checkpoints.length).toBe(coldTl.checkpoints.length)
-        expect(warmTl.current.length).toBe(coldTl.current.length)
+        // Correctness guard: a repeat timeline is stable.
+        expect(repeatTl.checkpoints.length).toBe(startTl.checkpoints.length)
+        expect(repeatTl.current.length).toBe(startTl.current.length)
 
         const fmt = (n: number): string => `${n.toFixed(1)}ms`
         // process.stdout.write bypasses vitest's console capture so the table
@@ -154,17 +161,14 @@ describe.skipIf(!PROFILE)('timeline startup profile (synthetic vault)', () => {
         process.stdout.write(
           `\n[profile ${backend}] files=${FILES} checkpoints=${CHECKPOINTS}\n` +
             `  onboard             ${fmt(tOnboard)}\n` +
-            `  timeline COLD       ${fmt(tCold)}   (unprimed: (1+N) full walks)\n` +
-            `  rescan (prime)      ${fmt(tRescan)}\n` +
-            `  timeline WARM       ${fmt(tWarm)}   (primed: in-memory diffs)\n` +
-            `  prime+warm total    ${fmt(tRescan + tWarm)}\n` +
-            `  speedup cold/(prime+warm) ${(tCold / Math.max(tRescan + tWarm, 0.01)).toFixed(1)}×\n`,
+            `  timeline STARTUP    ${fmt(tStartup)}   (fresh engine: prime + cheap summaries)\n` +
+            `  timeline REPEAT     ${fmt(tRepeat)}   (index warm)\n` +
+            `  checkpointDiff      ${fmt(tExpand)}   (lazy full diff, one checkpoint)\n`,
         )
 
-        // The whole point: a primed timeline is cheaper than the cold one. Use a
-        // loose bound (prime+warm < cold) so the assertion is meaningful without
-        // being timing-flaky on a tiny vault.
-        expect(tRescan + tWarm).toBeLessThanOrEqual(tCold)
+        // The warm repeat must not be dramatically worse than the cold startup
+        // (loose bound to avoid timing flakiness on tiny vaults).
+        expect(tRepeat).toBeLessThanOrEqual(tStartup * 2 + 50)
       },
       CASE_TIMEOUT_MS,
     )

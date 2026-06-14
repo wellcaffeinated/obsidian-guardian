@@ -169,6 +169,33 @@ describe('incremental work-index (touch / rescan)', () => {
     expect(tl.checkpoints[0]?.changes.map((c) => c.path)).toEqual(['a.md'])
   })
 
+  it('timeline ships cheap checkpoint summaries; checkpointDiff fills in stats', async () => {
+    const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
+    await write(vault, 'a.md', 'one\ntwo\n') // diverge so the checkpoint is real
+    await engine.touch('a.md')
+    const cp = await engine.checkpoint()
+    await write(vault, 'a.md', 'one\ntwo\nthree\n') // one more line past cp
+    await engine.touch('a.md')
+
+    // timeline()'s per-checkpoint summary keeps kind + path but skips the
+    // (blob-reading) line stats — added/removed are 0 in the cheap path.
+    const tl = await engine.timeline()
+    const summary = tl.checkpoints[0]?.changes ?? []
+    expect(summary.map((c) => `${c.kind} ${c.path}`)).toEqual(['modify a.md'])
+    expect(summary[0]).toMatchObject({ added: 0, removed: 0 })
+
+    // The live `current` diff IS computed with stats (always shown): baseline
+    // 'one' → 'one/two/three' is +2.
+    expect(tl.current[0]).toMatchObject({ kind: 'modify', path: 'a.md' })
+    expect(tl.current[0]?.added).toBe(2)
+
+    // checkpointDiff(oid) is the lazy, full diff for an expanded row: the
+    // checkpoint ('one/two') → working tree ('one/two/three') is +1.
+    const full = await engine.checkpointDiff(cp.oid)
+    expect(full.map((c) => `${c.kind} ${c.path}`)).toEqual(['modify a.md'])
+    expect(full[0]).toMatchObject({ path: 'a.md', added: 1, removed: 0 })
+  })
+
   it('bless() clears pending and re-syncs the index from disk', async () => {
     const { engine, vault } = await freshEngine({ 'a.md': 'one\n' })
     await write(vault, 'a.md', 'two\n')

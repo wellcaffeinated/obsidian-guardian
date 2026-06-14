@@ -24,7 +24,13 @@ import {
   resolvePluginConfig,
 } from './config'
 import { defaultGitDir, desktopFs } from './desktop-env'
-import { buildPanelData, type PanelData, type PanelStatus } from './format'
+import {
+  buildPanelData,
+  type FileRow,
+  type PanelData,
+  type PanelStatus,
+  toFileRow,
+} from './format'
 import {
   type ReviewController,
   ReviewView,
@@ -439,6 +445,12 @@ export default class ObsidianGuardianPlugin
       reverse,
       this.settings.diffContext,
     )
+  }
+
+  async checkpointChanges(oid: string): Promise<FileRow[]> {
+    if (!this.engine) return []
+    const changes = await this.engine.checkpointDiff(oid)
+    return changes.map(toFileRow)
   }
 
   openFile(path: string): void {
