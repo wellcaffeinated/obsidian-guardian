@@ -64,20 +64,46 @@ Three compounding root causes:
       `leaf.loadIfDeferred()` instead of skipping non-`ReviewView` leaves); ensure
       a materializing `ReviewView` always pulls fresh post-init state.
 
-### Perf optimization — measure before/after
-- [ ] Prime the work index once before building the startup timeline
-      (`ensureIndex()` / `scanWorkdirHashes`), so timeline drops from (1+N)·M to
-      ~M reads.
-- [ ] Optionally make startup `recover()` not block first paint (paint timeline,
-      then recover in background).
+### Profiling harness (bounded — never on the real vault) — DONE
+- [x] Vitest profiler over a **synthetic** vault, both backends (node:fs and
+      LightningFS via `fake-indexeddb`):
+      `packages/engine/test/timeline-perf.profile.test.ts`, skipped unless
+      `OG_PROFILE=1`. Resource-bounded runner: `scripts/profile-timeline.sh`
+      (`pnpm profile:timeline`) — caps file/checkpoint counts, V8 heap, CPU
+      seconds, and wall-clock. Measures onboard / cold timeline / rescan / warm
+      timeline per backend and prints a table.
 
-### Profiling harness (bounded — never on the real vault)
-- [ ] Vitest-based profiler over a **synthetic** vault, both backends
-      (node:fs and LightningFS via `fake-indexeddb`, copy the
-      `indexeddb-store.spike.test.ts` pattern). Hard caps on file count / size /
-      checkpoint count + per-test timeouts so it cannot overload the sandbox.
-      Report per-step timings (isOnboarded / onboard / recover / timeline / scan)
-      and the (1+N)·M curve, before and after the index-priming fix.
+### Profiling findings (2026-06-14) — corrected the hypothesis
+Measured (fake-indexeddb under-represents real mobile IDB, so treat as a *lower*
+bound for `idb`):
+
+| backend | files×cps | timeline COLD | rescan | timeline WARM |
+|---------|-----------|---------------|--------|---------------|
+| node:fs | 250×12    | 475ms         | 11ms   | 292ms         |
+| idb     | 250×12    | 1000ms        | 10ms   | 350ms         |
+| node:fs | 600×24    | 2172ms        | 28ms   | 1399ms        |
+| idb     | 600×24    | 3371ms        | 25ms   | 2561ms        |
+
+- Priming the work index (`ensureIndex`/`rescan`) is only a **~1.3–1.5×** win,
+  NOT the dramatic gain first assumed. Confirmed `recover()`/`ingest()` never
+  prime `workIndex`, so startup `timeline()` is genuinely the cold path — but the
+  warm path is still slow.
+- **Dominant cost: `timeline()` eagerly computes a full per-file diff for EVERY
+  checkpoint** (`engine.ts buildChanges`): each changed file does a `readWorkdir`
+  + `readMarkerBlob` + line-count `stats`, for all N checkpoints — even though the
+  panel collapses checkpoint rows by default (`openCheckpoints` starts empty).
+  Cost grows ~O(N²·churn) blob reads + O(N) `readFlatTree`.
+
+### Perf optimization — revised priority
+- [ ] **Defer per-checkpoint diffs** (high value): `timeline()` should return
+      cheap checkpoint metadata only (oid/seq/when/tree) — or a tree-vs-tree
+      changed-path list with NO blob reads / line counting — and compute the full
+      per-file line diff lazily on row expansion (mirror the already-lazy
+      `fileDiff`). This removes the O(N²) eager blob reads.
+- [ ] **Prime the index once** (small but free win): `ensureIndex()` at the top
+      of `timeline()` so the live diff + checkpoint diffs skip the per-checkpoint
+      full working-tree walk. ~1.3–1.5× on top of the above.
+- [ ] Optionally make startup `recover()` not block first paint.
 
 ## Verification
 - `pnpm -r test`, `pnpm -r typecheck`, `pnpm lint`, `pnpm knip`, engine+plugin

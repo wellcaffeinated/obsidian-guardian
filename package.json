@@ -11,6 +11,7 @@
     "test:plugin": "bash scripts/smoke-plugin.sh",
     "screenshot:plugin": "bash scripts/screenshot-plugin.sh",
     "shot:stub": "bash scripts/shot-stub.sh",
+    "profile:timeline": "bash scripts/profile-timeline.sh",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format . --write",
