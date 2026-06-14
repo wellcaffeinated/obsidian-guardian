@@ -24,7 +24,7 @@ import {
   resolvePluginConfig,
 } from './config'
 import { defaultGitDir, desktopFs } from './desktop-env'
-import { buildPanelData, type PanelData } from './format'
+import { buildPanelData, type PanelData, type PanelStatus } from './format'
 import {
   type ReviewController,
   ReviewView,
@@ -74,6 +74,18 @@ export default class ObsidianGuardianPlugin
   /** The engine's composite fs; reused to read peer signals on the worktree. */
   private fs: RoutingFs | null = null
   private active = false
+  /** Panel lifecycle for legible UI: starts `loading` until init() resolves. */
+  private status: PanelStatus = 'loading'
+  /** Last failure message, surfaced in the error panel (cleared on success). */
+  private lastError: string | null = null
+  /**
+   * Tail of the serial operation queue. Every engine-touching path
+   * ({@link init}/{@link activate}/{@link refresh}/{@link run}/{@link flushEdits}/
+   * {@link runIngest}/{@link firstBless}) runs through {@link enqueue} so a
+   * debounced auto-refresh, a user action, and startup never overlap or race —
+   * engine ops are multi-await and not atomic across awaits.
+   */
+  private opChain: Promise<unknown> = Promise.resolve()
   private timeline: Timeline | null = null
   private peers: PanelData['peers'] = null
   private refreshDebouncer: Debouncer | null = null
@@ -81,6 +93,30 @@ export default class ObsidianGuardianPlugin
   private statusBarEl: HTMLElement | null = null
   /** Paths edited since the last flush, fed to engine.touch() before re-rendering. */
   private readonly pendingTouches = new Set<string>()
+
+  /**
+   * Run `task` after all previously-enqueued operations settle (success or
+   * failure), so engine work is strictly serialized. A failing task never breaks
+   * the chain for the next one. Top-level entry points enqueue; internal helpers
+   * they call (e.g. {@link reloadTimeline}) must NOT, or they would deadlock.
+   */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.opChain.then(task, task)
+    this.opChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  /** Move to the error state: record the message, notify, and re-render. */
+  private setError(action: string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err)
+    this.status = 'error'
+    this.lastError = `Couldn’t ${action}: ${message}`
+    this.fail(action, err)
+    this.updateViews()
+  }
 
   override async onload(): Promise<void> {
     await this.loadSettings()
@@ -154,21 +190,31 @@ export default class ObsidianGuardianPlugin
   // --- lifecycle ------------------------------------------------------------
 
   /** Build the engine and, if this device is already active, resume reviewing. */
-  private async init(): Promise<void> {
-    if (!(await this.buildEngine())) return
-    const engine = this.engine
-    if (!engine) return
-    try {
-      this.active = await engine.isOnboarded()
-      if (this.active) {
-        await engine.onboard() // idempotent on an existing baseline
-        await engine.recover() // re-apply synced blesses, republish state
-        await this.reloadTimeline()
+  private init(): Promise<void> {
+    return this.enqueue(async () => {
+      this.status = 'loading'
+      this.lastError = null
+      this.updateViews()
+      if (!(await this.buildEngine()) || !this.engine) {
+        this.setError('initialise', this.lastError ?? 'engine setup failed')
+        return
       }
-    } catch (err) {
-      this.fail('initialise', err)
-    }
-    this.updateViews()
+      const engine = this.engine
+      try {
+        this.active = await engine.isOnboarded()
+        if (this.active) {
+          await engine.onboard() // idempotent on an existing baseline
+          await engine.recover() // re-apply synced blesses, republish state
+          this.status = 'ready'
+          await this.reloadTimeline()
+        } else {
+          this.status = 'inactive'
+          this.updateViews()
+        }
+      } catch (err) {
+        this.setError('initialise', err)
+      }
+    })
   }
 
   /** Resolve config + construct the engine (no side effects on the repo). */
@@ -277,16 +323,18 @@ export default class ObsidianGuardianPlugin
   }
 
   /** Apply queued per-path re-hashes, then recompute + re-render (the hot path). */
-  private async flushEdits(): Promise<void> {
-    if (!this.active || !this.engine) return
-    const paths = [...this.pendingTouches]
-    this.pendingTouches.clear()
-    try {
-      for (const path of paths) await this.engine.touch(path)
-      await this.reloadTimeline()
-    } catch (err) {
-      this.fail('refresh', err)
-    }
+  private flushEdits(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.active || !this.engine) return
+      const paths = [...this.pendingTouches]
+      this.pendingTouches.clear()
+      try {
+        for (const path of paths) await this.engine.touch(path)
+        await this.reloadTimeline()
+      } catch (err) {
+        this.fail('refresh', err)
+      }
+    })
   }
 
   // --- ReviewController ------------------------------------------------------
@@ -296,38 +344,53 @@ export default class ObsidianGuardianPlugin
       active: this.active,
       timeline: this.timeline,
       peers: this.peers,
+      status: this.status,
+      error: this.lastError,
     })
   }
 
-  async activate(): Promise<void> {
-    if (!this.engine && !(await this.buildEngine())) return
-    const engine = this.engine
-    if (!engine) return
-    try {
-      const fresh = await engine.onboard()
-      this.active = true
-      await engine.recover()
-      await this.reloadTimeline()
-      if (fresh) {
-        // Let the host settle its own config writes, then bless once.
-        window.setTimeout(() => void this.firstBless(), FIRST_BLESS_DELAY_MS)
-      }
-      new Notice('Obsidian Guardian: reviewing activated on this device.')
-    } catch (err) {
-      this.fail('activate', err)
-    }
+  /** Re-run initialisation after an error (rebuild the engine + resume). */
+  retry(): Promise<void> {
+    this.engine = null
+    this.config = null
+    this.fs = null
+    return this.init()
   }
 
-  async refresh(): Promise<void> {
-    if (!this.active || !this.engine) return
-    try {
-      // Explicit refresh = authoritative reconcile (catches any missed events).
-      this.pendingTouches.clear()
-      await this.engine.rescan()
-      await this.reloadTimeline()
-    } catch (err) {
-      this.fail('refresh', err)
-    }
+  activate(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.engine && !(await this.buildEngine())) return
+      const engine = this.engine
+      if (!engine) return
+      try {
+        const fresh = await engine.onboard()
+        this.active = true
+        await engine.recover()
+        this.status = 'ready'
+        await this.reloadTimeline()
+        if (fresh) {
+          // Let the host settle its own config writes, then bless once.
+          window.setTimeout(() => void this.firstBless(), FIRST_BLESS_DELAY_MS)
+        }
+        new Notice('Obsidian Guardian: reviewing activated on this device.')
+      } catch (err) {
+        this.setError('activate', err)
+      }
+    })
+  }
+
+  refresh(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.active || !this.engine) return
+      try {
+        // Explicit refresh = authoritative reconcile (catches any missed events).
+        this.pendingTouches.clear()
+        await this.engine.rescan()
+        await this.reloadTimeline()
+      } catch (err) {
+        this.fail('refresh', err)
+      }
+    })
   }
 
   async checkpoint(): Promise<void> {
@@ -396,41 +459,48 @@ export default class ObsidianGuardianPlugin
   // --- internals -------------------------------------------------------------
 
   /** First-activation bless: advance the baseline past host startup self-writes. */
-  private async firstBless(): Promise<void> {
-    if (!this.active || !this.engine) return
-    try {
-      await this.engine.bless()
-      await this.reloadTimeline()
-    } catch (err) {
-      this.fail('settle baseline', err)
-    }
+  private firstBless(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.active || !this.engine) return
+      try {
+        await this.engine.bless()
+        await this.reloadTimeline()
+      } catch (err) {
+        this.fail('settle baseline', err)
+      }
+    })
   }
 
-  private async runIngest(): Promise<void> {
-    if (!this.active || !this.engine) return
-    try {
-      await this.engine.ingest()
-      await this.reloadTimeline()
-    } catch (err) {
-      this.fail('ingest', err)
-    }
+  private runIngest(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.active || !this.engine) return
+      try {
+        await this.engine.ingest()
+        await this.reloadTimeline()
+      } catch (err) {
+        this.fail('ingest', err)
+      }
+    })
   }
 
-  /** Run a mutating engine action, then reload + re-render. */
-  private async run(
+  /** Run a mutating engine action, then reload + re-render. Serialized so it
+   * never overlaps a debounced refresh, another action, or startup. */
+  private run(
     label: string,
     fn: (engine: ReviewEngine) => Promise<void>,
   ): Promise<void> {
-    if (!this.active || !this.engine) {
-      new Notice('Activate reviewing on this device first.')
-      return
-    }
-    try {
-      await fn(this.engine)
-      await this.reloadTimeline()
-    } catch (err) {
-      this.fail(label, err)
-    }
+    return this.enqueue(async () => {
+      if (!this.active || !this.engine) {
+        new Notice('Activate reviewing on this device first.')
+        return
+      }
+      try {
+        await fn(this.engine)
+        await this.reloadTimeline()
+      } catch (err) {
+        this.fail(label, err)
+      }
+    })
   }
 
   /** Recompute the timeline + peer presence and re-render every open panel. */
@@ -467,13 +537,31 @@ export default class ObsidianGuardianPlugin
     this.renderStatusBar()
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW)) {
       const view = leaf.view
-      if (view instanceof ReviewView) view.update()
+      if (view instanceof ReviewView) {
+        view.update()
+      } else if (leaf.isDeferred) {
+        // On mobile, a panel restored from the saved layout is *deferred*: its
+        // ReviewView isn't constructed yet, so the instanceof above misses it and
+        // the post-init refresh would be silently dropped (the panel stays on its
+        // stale/loading body until the user taps it). Materialise it now — its
+        // onOpen pulls fresh getData(). Runs at most once per leaf (it's no longer
+        // deferred afterwards).
+        void leaf.loadIfDeferred()
+      }
     }
   }
 
-  /** Reflect activation + pending count in the clickable status-bar item. */
+  /** Reflect lifecycle + pending count in the clickable status-bar item. */
   private renderStatusBar(): void {
     if (!this.statusBarEl) return
+    if (this.status === 'loading') {
+      this.statusBarEl.setText('OG: loading…')
+      return
+    }
+    if (this.status === 'error') {
+      this.statusBarEl.setText('OG: error')
+      return
+    }
     if (!this.active) {
       this.statusBarEl.setText('OG: inactive')
       return

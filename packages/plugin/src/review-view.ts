@@ -44,6 +44,8 @@ export interface ReviewController {
   getData(): PanelData
   /** Activate reviewing on this device (first-time onboard). */
   activate(): Promise<void>
+  /** Re-run initialisation after an error (rebuild the engine + resume). */
+  retry(): Promise<void>
   /** Recompute the timeline and re-render. */
   refresh(): Promise<void>
   /** Freeze the working tree into a device-local checkpoint. */
@@ -182,7 +184,17 @@ export class ReviewView extends ItemView {
     root.addClass('og')
     this.renderHeader(root, data)
 
-    if (!data.active) {
+    if (data.status === 'loading') {
+      this.renderLoading(root)
+      this.renderFooter(root)
+      return
+    }
+    if (data.status === 'error') {
+      this.renderError(root, data.error)
+      this.renderFooter(root)
+      return
+    }
+    if (data.status === 'inactive') {
       this.renderInactive(root)
       this.renderFooter(root)
       return
@@ -253,6 +265,39 @@ export class ReviewView extends ItemView {
         text: `${data.peers.count} ${data.peers.count === 1 ? 'device' : 'devices'} · updated ${formatWhen(data.peers.updatedAt)}`,
       })
     }
+  }
+
+  private renderLoading(root: HTMLElement): void {
+    const card = root.createDiv({ cls: 'og-entry og-entry--current' })
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    body.createDiv({ cls: 'og-compare', text: 'Loading review…' })
+    body.createDiv({
+      cls: 'og-footer',
+      text: 'Reading this device’s change history. On a large vault this can take a moment, especially on mobile.',
+    })
+  }
+
+  private renderError(root: HTMLElement, message: string | null): void {
+    const card = root.createDiv({ cls: 'og-entry og-entry--current' })
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    body.createDiv({
+      cls: 'og-compare',
+      text: 'Could not load the review state.',
+    })
+    body.createDiv({
+      cls: 'og-footer',
+      text: message ?? 'An unknown error occurred.',
+    })
+    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    this.button(
+      actions,
+      'refresh-cw',
+      'Try again',
+      () => {
+        void this.controller.retry()
+      },
+      'cta',
+    )
   }
 
   private renderInactive(root: HTMLElement): void {
