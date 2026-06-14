@@ -116,7 +116,25 @@ scan (`ensureIndex`) over LightningFS + one cheap tree read per checkpoint; the
 O((1+N)·M) blob reads are gone. Full per-file stats are paid only when the user
 expands a specific checkpoint (~140ms), not at startup.
 
-## Verification
-- `pnpm -r test`, `pnpm -r typecheck`, `pnpm lint`, `pnpm knip`, engine+plugin
-  builds. Plugin behavior in the **headless container only** (never the user's
-  real Obsidian) per CLAUDE.md.
+## Verification — DONE
+- Gate green: `pnpm -r test` (63 engine + 36 plugin), `pnpm -r typecheck`,
+  `pnpm knip`, engine+plugin builds. `pnpm lint` clean except two PRE-EXISTING,
+  unrelated items (the CSS specificity warning + `release-please-config.json`
+  formatting, both already failing on `main`).
+- **Headless-container smoke (`pnpm test:plugin`): PASS** — load → activate →
+  onboard/recover → device-state publish → first-activation bless → screenshot →
+  edit → bless, all green with the new code. (First run flaked on a 180s
+  container cold-start; the rig was healthy on retry — not a code issue.)
+- **Targeted live check of the deferred-diff path** (real Obsidian): after a
+  checkpoint, `getData().status === "ready"`; the timeline checkpoint summary is
+  cheap (`modify Ideas.md +0 -0`) while the lazy `checkpointChanges(oid)` returns
+  full stats (`modify Ideas.md +2 -0`).
+- NOTE: the container is desktop (node:fs); the mobile-only paths (deferred
+  leaves on restart, LightningFS/IndexedDB) can't be exercised here — they're
+  covered by code review + the engine's fake-indexeddb tests/profiler. Worth a
+  real-device sanity check on the user's Android vault before relying on it.
+
+## Still open / next
+- [ ] Optional: startup `recover()` off the first-paint path.
+- [ ] Real-device (Android) confirmation of the loading state + deferred-leaf
+      refresh after a restart on the large vault.
