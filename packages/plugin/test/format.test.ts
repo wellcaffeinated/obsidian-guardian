@@ -171,4 +171,36 @@ describe('buildPanelData', () => {
       updatedAt: '2026-05-31T02:00:00.000Z',
     })
   })
+
+  it('derives status from active when not given (and defaults error null)', () => {
+    expect(buildPanelData({ active: false, timeline: null })).toMatchObject({
+      status: 'inactive',
+      error: null,
+    })
+    expect(
+      buildPanelData({
+        active: true,
+        timeline: {
+          baseline: { oid: null, when: null, tree: null },
+          current: [],
+          checkpoints: [],
+        },
+      }).status,
+    ).toBe('ready')
+  })
+
+  it('passes through an explicit status + error (loading/error panels)', () => {
+    expect(
+      buildPanelData({ active: false, timeline: null, status: 'loading' })
+        .status,
+    ).toBe('loading')
+    const errored = buildPanelData({
+      active: false,
+      timeline: null,
+      status: 'error',
+      error: 'boom',
+    })
+    expect(errored.status).toBe('error')
+    expect(errored.error).toBe('boom')
+  })
 })

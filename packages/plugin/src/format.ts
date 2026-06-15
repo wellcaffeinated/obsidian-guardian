@@ -63,8 +63,22 @@ interface CheckpointRow {
   changes: FileRow[]
 }
 
+/**
+ * Lifecycle of the review panel, so it never conflates "still loading" with
+ * "not activated":
+ * - `loading` — the engine/timeline is being built (slow on a large mobile vault);
+ * - `inactive` — onboarding check finished and this device has not activated;
+ * - `ready` — activated and the timeline is loaded;
+ * - `error` — init or an action threw (see {@link PanelData.error}).
+ */
+export type PanelStatus = 'loading' | 'inactive' | 'ready' | 'error'
+
 /** The complete data the review panel renders. */
 export interface PanelData {
+  /** Lifecycle state driving which panel body renders. */
+  status: PanelStatus
+  /** Human-readable failure message when `status === 'error'`, else null. */
+  error: string | null
   /** Whether this device has activated reviewing (gitDir baseline exists). */
   active: boolean
   /** Baseline marker, or null when not yet onboarded. */
@@ -143,12 +157,26 @@ export function buildPanelData(args: {
   active: boolean
   timeline: Timeline | null
   peers?: { count: number; updatedAt: string | null } | null
+  /** Explicit lifecycle; defaults to `ready`/`inactive` derived from `active`. */
+  status?: PanelStatus
+  error?: string | null
 }): PanelData {
-  const { active, timeline, peers = null } = args
+  const { active, timeline, peers = null, error = null } = args
+  const status: PanelStatus = args.status ?? (active ? 'ready' : 'inactive')
   if (!timeline) {
-    return { active, baseline: null, current: [], checkpoints: [], peers }
+    return {
+      status,
+      error,
+      active,
+      baseline: null,
+      current: [],
+      checkpoints: [],
+      peers,
+    }
   }
   return {
+    status,
+    error,
     active,
     baseline: {
       shortHash: shortMarker(timeline.baseline.oid),

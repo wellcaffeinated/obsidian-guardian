@@ -44,6 +44,8 @@ export interface ReviewController {
   getData(): PanelData
   /** Activate reviewing on this device (first-time onboard). */
   activate(): Promise<void>
+  /** Re-run initialisation after an error (rebuild the engine + resume). */
+  retry(): Promise<void>
   /** Recompute the timeline and re-render. */
   refresh(): Promise<void>
   /** Freeze the working tree into a device-local checkpoint. */
@@ -61,6 +63,12 @@ export interface ReviewController {
    * `reverse` for the restore direction (working tree → fromRef) used by History.
    */
   fileDiff(path: string, fromRef?: string, reverse?: boolean): Promise<FileDiff>
+  /**
+   * Full per-file change list (with line stats) for a checkpoint → working tree.
+   * `timeline()` returns only a cheap summary per checkpoint; the panel fetches
+   * the full diff lazily when a checkpoint row is expanded.
+   */
+  checkpointChanges(oid: string): Promise<FileRow[]>
   /** Open a vault file in a new pane. */
   openFile(path: string): void
 }
@@ -121,6 +129,15 @@ export class ReviewView extends ItemView {
     string,
     { path: string; fromRef: string | undefined; reverse: boolean }
   >()
+  /**
+   * Full per-checkpoint change lists (with line stats), fetched lazily when a
+   * checkpoint row is expanded — `timeline()` only ships a cheap summary. Keyed
+   * by checkpoint oid. Cleared on {@link update} since the diff is to the (moved)
+   * working tree.
+   */
+  private readonly checkpointDiffs = new Map<string, FileRow[]>()
+  /** Checkpoint oids with an in-flight {@link ReviewController.checkpointChanges}. */
+  private readonly fetchingCheckpoints = new Set<string>()
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
     super(leaf)
@@ -145,6 +162,9 @@ export class ReviewView extends ItemView {
 
   /** Re-render from the host's current data. Called by the plugin after actions. */
   update(): void {
+    // The working tree moved, so cached checkpoint→worktree diffs are stale;
+    // drop them so an expanded checkpoint refetches its full per-file stats.
+    this.checkpointDiffs.clear()
     // Re-render synchronously from the cached diffs first (so an open diff never
     // flashes back to "Loading…"), then quietly re-validate any expanded diffs
     // against the moved tree, re-rendering only if a *shown* diff actually
@@ -174,6 +194,22 @@ export class ReviewView extends ItemView {
     if (dirty) this.render()
   }
 
+  /** Fetch a checkpoint's full per-file diff once, cache it, then re-render. */
+  private async loadCheckpointChanges(oid: string): Promise<void> {
+    if (this.checkpointDiffs.has(oid) || this.fetchingCheckpoints.has(oid))
+      return
+    this.fetchingCheckpoints.add(oid)
+    try {
+      this.checkpointDiffs.set(
+        oid,
+        await this.controller.checkpointChanges(oid),
+      )
+    } finally {
+      this.fetchingCheckpoints.delete(oid)
+    }
+    this.render()
+  }
+
   private render(): void {
     const data = this.controller.getData()
     const root = this.contentEl
@@ -182,7 +218,17 @@ export class ReviewView extends ItemView {
     root.addClass('og')
     this.renderHeader(root, data)
 
-    if (!data.active) {
+    if (data.status === 'loading') {
+      this.renderLoading(root)
+      this.renderFooter(root)
+      return
+    }
+    if (data.status === 'error') {
+      this.renderError(root, data.error)
+      this.renderFooter(root)
+      return
+    }
+    if (data.status === 'inactive') {
       this.renderInactive(root)
       this.renderFooter(root)
       return
@@ -253,6 +299,39 @@ export class ReviewView extends ItemView {
         text: `${data.peers.count} ${data.peers.count === 1 ? 'device' : 'devices'} · updated ${formatWhen(data.peers.updatedAt)}`,
       })
     }
+  }
+
+  private renderLoading(root: HTMLElement): void {
+    const card = root.createDiv({ cls: 'og-entry og-entry--current' })
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    body.createDiv({ cls: 'og-compare', text: 'Loading review…' })
+    body.createDiv({
+      cls: 'og-footer',
+      text: 'Reading this device’s change history. On a large vault this can take a moment, especially on mobile.',
+    })
+  }
+
+  private renderError(root: HTMLElement, message: string | null): void {
+    const card = root.createDiv({ cls: 'og-entry og-entry--current' })
+    const body = card.createDiv({ cls: 'og-entry__body' })
+    body.createDiv({
+      cls: 'og-compare',
+      text: 'Could not load the review state.',
+    })
+    body.createDiv({
+      cls: 'og-footer',
+      text: message ?? 'An unknown error occurred.',
+    })
+    const actions = body.createDiv({ cls: 'og-entry__actions' })
+    this.button(
+      actions,
+      'refresh-cw',
+      'Try again',
+      () => {
+        void this.controller.retry()
+      },
+      'cta',
+    )
   }
 
   private renderInactive(root: HTMLElement): void {
@@ -407,15 +486,26 @@ export class ReviewView extends ItemView {
       // (default fromRef = undefined). Key file rows distinctly so diffs don't mix.
       const fromRef = entry.isBaseline ? undefined : entry.oid
       const fromRefKey = entry.isBaseline ? BASELINE_KEY : entry.oid
-      for (const change of entry.changes) {
-        this.renderFileRow(
-          body,
-          reverseFileRow(change),
-          fromRefKey,
-          fromRef,
-          false,
-          /* reverse */ true,
-        )
+      // The baseline's rows come from the always-computed `current` diff; a
+      // checkpoint's full per-file stats are fetched lazily (timeline ships only
+      // a cheap summary), so render a placeholder until they arrive.
+      const rows = entry.isBaseline
+        ? entry.changes
+        : this.checkpointDiffs.get(entry.oid)
+      if (rows) {
+        for (const change of rows) {
+          this.renderFileRow(
+            body,
+            reverseFileRow(change),
+            fromRefKey,
+            fromRef,
+            false,
+            /* reverse */ true,
+          )
+        }
+      } else {
+        body.createDiv({ cls: 'og-compare', text: 'Loading changes…' })
+        void this.loadCheckpointChanges(entry.oid)
       }
     }
 
