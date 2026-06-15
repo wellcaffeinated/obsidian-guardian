@@ -1,6 +1,6 @@
 {
   "name": "obsidian-guardian",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Agent vault review: review and accept/revert what agents changed in an Obsidian vault, since the last blessed state.",

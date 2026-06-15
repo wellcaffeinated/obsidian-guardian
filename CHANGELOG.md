@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.2.0...obsidian-guardian-v0.2.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **plugin:** serialize engine ops, add loading/error panel states, refresh deferred leaves ([28178a2](https://github.com/wellcaffeinated/obsidian-guardian/commit/28178a2375ed4daeadb73c5e070cae0530b79679))
+* remove unneeded settings ([090d9b9](https://github.com/wellcaffeinated/obsidian-guardian/commit/090d9b9979968c042d1ad3d0d3cd78d19e4e87bb))
+
+
+### Performance
+
+* **engine,plugin:** defer per-checkpoint diffs + prime index in timeline() ([c3591b0](https://github.com/wellcaffeinated/obsidian-guardian/commit/c3591b061c29d08b5972d44d5285b776a79acd9e))
+
 ## [0.2.0](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.1.0...obsidian-guardian-v0.2.0) (2026-06-13)
 
 
