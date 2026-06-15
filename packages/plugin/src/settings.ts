@@ -27,34 +27,11 @@ export class GuardianSettingTab extends PluginSettingTab {
     const s = this.host.settings
 
     new Setting(containerEl)
-      .setName('Git database folder')
-      .setDesc(
-        'Where the device-local git history lives. Must be OUTSIDE the vault (it must never sync). Empty = a per-machine app-data folder.',
-      )
-      .addText((t) =>
-        t
-          .setPlaceholder('(app-data default)')
-          .setValue(s.gitDir)
-          .onChange((v) => {
-            s.gitDir = v
-          }),
-      )
-
-    new Setting(containerEl)
       .setName('Review folder')
       .setDesc('Vault-relative folder for sync signals (git-ignored).')
       .addText((t) =>
         t.setValue(s.reviewFolder).onChange((v) => {
           s.reviewFolder = v
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('Baseline marker')
-      .setDesc('Branch name used as the advanceable "last blessed" marker.')
-      .addText((t) =>
-        t.setValue(s.markerRef).onChange((v) => {
-          s.markerRef = v
         }),
       )
 
@@ -68,21 +45,6 @@ export class GuardianSettingTab extends PluginSettingTab {
           s.ignore = v
         }),
       )
-
-    new Setting(containerEl)
-      .setName('Bless author name')
-      .setDesc('Recorded on baseline commits. Empty = engine default.')
-      .addText((t) =>
-        t.setValue(s.authorName).onChange((v) => {
-          s.authorName = v
-        }),
-      )
-
-    new Setting(containerEl).setName('Bless author email').addText((t) =>
-      t.setValue(s.authorEmail).onChange((v) => {
-        s.authorEmail = v
-      }),
-    )
 
     new Setting(containerEl)
       .setName('Diff context lines')
