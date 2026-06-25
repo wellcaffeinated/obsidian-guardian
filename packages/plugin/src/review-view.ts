@@ -138,6 +138,14 @@ export class ReviewView extends ItemView {
   private readonly checkpointDiffs = new Map<string, FileRow[]>()
   /** Checkpoint oids with an in-flight {@link ReviewController.checkpointChanges}. */
   private readonly fetchingCheckpoints = new Set<string>()
+  /**
+   * Label of the long-running mutating action in flight (`'bless'`, `'rollback'`,
+   * `'restore'`), or `null` when idle. While set, the triggering button shows a
+   * spinner and every action button is disabled — these engine ops can take many
+   * seconds on mobile (git over IndexedDB), and without this the panel looked
+   * frozen and invited a second tap. Cleared in {@link runBusy}'s `finally`.
+   */
+  private busy: string | null = null
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
     super(leaf)
@@ -208,6 +216,29 @@ export class ReviewView extends ItemView {
       this.fetchingCheckpoints.delete(oid)
     }
     this.render()
+  }
+
+  /**
+   * Run a slow mutating controller action with visible progress: mark the panel
+   * busy, re-render (button → spinner, others disabled), await, then clear and
+   * re-render. The guard makes a second tap a no-op while one is in flight; the
+   * controller serializes the engine work anyway, but this is the feedback the
+   * user sees. The controller's own post-action re-render arrives while `busy` is
+   * still set, so the spinner persists with no flicker until the work resolves.
+   */
+  private async runBusy(
+    label: string,
+    action: () => Promise<void>,
+  ): Promise<void> {
+    if (this.busy) return
+    this.busy = label
+    this.render()
+    try {
+      await action()
+    } finally {
+      this.busy = null
+      this.render()
+    }
   }
 
   private render(): void {
@@ -359,12 +390,24 @@ export class ReviewView extends ItemView {
 
   private renderToolbar(root: HTMLElement): void {
     const bar = root.createDiv({ cls: 'og-toolbar' })
-    this.button(bar, 'refresh-cw', 'Refresh', () => {
-      void this.controller.refresh()
-    })
-    this.button(bar, 'camera', 'Checkpoint', () => {
-      void this.controller.checkpoint()
-    })
+    const busy = this.busy !== null
+    this.button(
+      bar,
+      'refresh-cw',
+      'Refresh',
+      () => void this.controller.refresh(),
+      undefined,
+      /* disabled */ busy,
+    )
+    this.button(
+      bar,
+      'camera',
+      'Checkpoint',
+      () => void this.runBusy('checkpoint', () => this.controller.checkpoint()),
+      undefined,
+      /* disabled */ busy,
+      /* spinning */ this.busy === 'checkpoint',
+    )
   }
 
   // --- current: live state, flat (no card), always expanded -----------------
@@ -396,14 +439,15 @@ export class ReviewView extends ItemView {
     }
 
     const actions = section.createDiv({ cls: 'og-entry__actions' })
+    const blessing = this.busy === 'bless'
     this.button(
       actions,
       'check-check',
-      'Accept as Baseline',
-      () => {
-        void this.controller.bless()
-      },
+      blessing ? 'Advancing baseline…' : 'Accept as Baseline',
+      () => void this.runBusy('bless', () => this.controller.bless()),
       'cta',
+      /* disabled */ this.busy !== null,
+      /* spinning */ blessing,
     )
     this.button(
       actions,
@@ -414,10 +458,12 @@ export class ReviewView extends ItemView {
           title: 'Discard all pending changes?',
           body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
           confirmText: 'Discard changes',
-          onConfirm: () => void this.controller.rollback(),
+          onConfirm: () =>
+            void this.runBusy('rollback', () => this.controller.rollback()),
         })
       },
       'warn',
+      /* disabled */ this.busy !== null,
     )
   }
 
@@ -516,7 +562,7 @@ export class ReviewView extends ItemView {
       entry.isBaseline ? 'Restore baseline' : 'Restore this checkpoint',
       () => this.confirmRestore(entry),
       'warn',
-      /* disabled */ live,
+      /* disabled */ live || this.busy !== null,
     )
   }
 
@@ -527,14 +573,18 @@ export class ReviewView extends ItemView {
         title: 'Discard all pending changes?',
         body: 'Every changed file is restored to the baseline. Edits made since the baseline are lost — your checkpoints are kept, so you can still restore from them.',
         confirmText: 'Discard changes',
-        onConfirm: () => void this.controller.rollback(),
+        onConfirm: () =>
+          void this.runBusy('rollback', () => this.controller.rollback()),
       })
     } else {
       this.confirm({
         title: 'Restore this checkpoint?',
         body: `The working tree is overwritten with checkpoint ${entry.shortHash}. Changes made since it are lost (the baseline is unchanged).`,
         confirmText: 'Restore',
-        onConfirm: () => void this.controller.restoreCheckpoint(entry.oid),
+        onConfirm: () =>
+          void this.runBusy('restore', () =>
+            this.controller.restoreCheckpoint(entry.oid),
+          ),
       })
     }
   }
@@ -722,15 +772,21 @@ export class ReviewView extends ItemView {
     onClick?: () => void,
     variant?: 'cta' | 'warn',
     disabled = false,
+    spinning = false,
   ): void {
     const btn = parent.createEl('button', {
       cls: `og-btn${variant ? ` og-btn--${variant}` : ''}`,
     })
-    setIcon(btn.createSpan({ cls: 'og-btn__icon' }), icon)
+    const iconEl = btn.createSpan({ cls: 'og-btn__icon' })
+    // A spinning button keeps its place in the layout but swaps to an animated
+    // loader so the user can see the action is running, not stuck.
+    setIcon(iconEl, spinning ? 'loader-2' : icon)
+    if (spinning) iconEl.addClass('og-spinner')
     btn.createSpan({ text: label })
-    if (disabled) {
+    if (disabled || spinning) {
       btn.disabled = true
       btn.addClass('og-btn--disabled')
+      if (spinning) btn.addClass('og-btn--loading')
     } else if (onClick) {
       btn.addEventListener('click', onClick)
     }

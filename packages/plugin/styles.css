@@ -79,6 +79,24 @@
   width: 1em;
   height: 1em;
 }
+/* Spinning loader on a button whose action is in flight (e.g. blessing on
+ * mobile, which can take many seconds). Keeps the button at full opacity so the
+ * motion stays visible even though the button is disabled. */
+.og .og-btn.og-btn--loading .og-spinner {
+  animation: og-spin 0.8s linear infinite;
+}
+.og .og-btn.og-btn--loading {
+  opacity: 0.85;
+  cursor: progress;
+}
+@keyframes og-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 /* `.og .og-btn.og-btn--x` (specificity 0,3,0) beats Obsidian's default
  * `button` styling without `!important`. */
 .og .og-btn.og-btn--cta {
