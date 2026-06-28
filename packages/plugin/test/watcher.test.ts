@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createDebouncer,
   createSerializedRefresh,
+  planVaultReaction,
   shouldIgnorePath,
 } from '../src/watcher'
 
@@ -23,6 +24,49 @@ describe('shouldIgnorePath', () => {
   it('respects a custom review folder', () => {
     expect(shouldIgnorePath('Review/changes.md', 'Review')).toBe(true)
     expect(shouldIgnorePath('_OG/changes.md', 'Review')).toBe(false)
+  })
+})
+
+describe('planVaultReaction', () => {
+  it('treats a sync-folder change as a peer signal: ingest only', () => {
+    expect(planVaultReaction('_OG/sync/bless-abc.json', '_OG')).toEqual({
+      touchPaths: [],
+      ingest: true,
+    })
+    expect(planVaultReaction('_OG/sync', '_OG')).toEqual({
+      touchPaths: [],
+      ingest: true,
+    })
+  })
+
+  it('re-arms ingest on a content change so a deferred bless retries when its bytes land', () => {
+    // Regression guard for desktop->mobile bless sync: a content-gated peer bless
+    // that synced ahead of its bytes is deferred; the bytes arriving later are a
+    // plain content event. If that event did not re-arm ingest (the pre-fix
+    // behavior), the baseline would stay stuck on mobile. `ingest` MUST be true.
+    expect(planVaultReaction('notes/a.md', '_OG')).toEqual({
+      touchPaths: ['notes/a.md'],
+      ingest: true,
+    })
+  })
+
+  it('includes both paths on a rename and still re-arms ingest', () => {
+    expect(planVaultReaction('notes/new.md', '_OG', 'notes/old.md')).toEqual({
+      touchPaths: ['notes/new.md', 'notes/old.md'],
+      ingest: true,
+    })
+  })
+
+  it('does nothing for an ignored path (no touch, no ingest)', () => {
+    expect(planVaultReaction('.obsidian/workspace.json', '_OG')).toEqual({
+      touchPaths: [],
+      ingest: false,
+    })
+    // A non-sync path inside the review folder is ignored entirely.
+    expect(planVaultReaction('_OG/state.json', '_OG')).toEqual({
+      touchPaths: [],
+      ingest: false,
+    })
   })
 })
 

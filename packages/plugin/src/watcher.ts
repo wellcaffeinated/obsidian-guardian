@@ -42,6 +42,45 @@ export function shouldIgnorePath(path: string, reviewFolder: string): boolean {
   return false
 }
 
+/** How the controller should react to one vault change (see {@link planVaultReaction}). */
+export interface VaultReaction {
+  /** Paths to re-hash via `engine.touch()` (drives the refresh debouncer). */
+  touchPaths: string[]
+  /** Whether to (re)arm the peer-bless ingest debouncer. */
+  ingest: boolean
+}
+
+/**
+ * Decide how to react to a vault change — pure, so it is unit-testable without
+ * Obsidian (`main.ts` maps the result onto its debouncers).
+ *
+ * - A change under `<reviewFolder>/sync/` is a peer signal ⇒ ingest only.
+ * - A content change ⇒ re-hash the touched path(s) AND re-arm ingest. The second
+ *   part is the load-bearing bit: a peer bless is content-gated, so one that
+ *   arrived before its (synced) bytes is *deferred* and retained; the bytes
+ *   landing later is a plain content event (no sync-folder change), so without
+ *   re-arming ingest here the obligation would never retry and the baseline would
+ *   stay stuck until some unrelated future signal. A no-op ingest doesn't
+ *   republish, so re-arming on every content change is cheap.
+ * - An ignored path (the review folder, `.obsidian`) ⇒ do nothing.
+ */
+export function planVaultReaction(
+  path: string,
+  reviewFolder: string,
+  oldPath?: string,
+): VaultReaction {
+  const syncDir = `${reviewFolder}/sync`
+  if (path === syncDir || path.startsWith(`${syncDir}/`)) {
+    return { touchPaths: [], ingest: true }
+  }
+  const touchPaths: string[] = []
+  if (!shouldIgnorePath(path, reviewFolder)) touchPaths.push(path)
+  if (oldPath && !shouldIgnorePath(oldPath, reviewFolder)) {
+    touchPaths.push(oldPath)
+  }
+  return { touchPaths, ingest: touchPaths.length > 0 }
+}
+
 /** A trailing-edge debouncer: `schedule()` (re)arms the timer; `cancel()` clears it. */
 export interface Debouncer {
   schedule: () => void

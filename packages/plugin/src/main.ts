@@ -37,7 +37,7 @@ import {
   VIEW_TYPE_REVIEW,
 } from './review-view'
 import { GuardianSettingTab, type SettingsHost } from './settings'
-import { createDebouncer, type Debouncer, shouldIgnorePath } from './watcher'
+import { createDebouncer, type Debouncer, planVaultReaction } from './watcher'
 
 // isomorphic-git (and its safe-buffer dep) reference a `Buffer` global. Desktop's
 // Electron Node provides one; the mobile WKWebView does not, so the first git op
@@ -313,19 +313,18 @@ export default class ObsidianGuardianPlugin
 
   private onVaultChange(path: string, oldPath?: string): void {
     if (!this.active || !this.config) return
-    const syncDir = `${this.config.reviewFolder}/sync`
-    if (path === syncDir || path.startsWith(`${syncDir}/`)) {
-      this.ingestDebouncer?.schedule()
-      return
-    }
-    // Queue the touched path(s); the debounced flush re-hashes only these.
-    if (!shouldIgnorePath(path, this.config.reviewFolder)) {
-      this.pendingTouches.add(path)
-    }
-    if (oldPath && !shouldIgnorePath(oldPath, this.config.reviewFolder)) {
-      this.pendingTouches.add(oldPath)
-    }
-    if (this.pendingTouches.size > 0) this.refreshDebouncer?.schedule()
+    // Routing decision is a pure function (testable without Obsidian); here we
+    // just map it onto the debouncers. A content change re-arms ingest too so a
+    // bless deferred ahead of its bytes retries once they sync in (see
+    // planVaultReaction).
+    const { touchPaths, ingest } = planVaultReaction(
+      path,
+      this.config.reviewFolder,
+      oldPath,
+    )
+    for (const p of touchPaths) this.pendingTouches.add(p)
+    if (touchPaths.length > 0) this.refreshDebouncer?.schedule()
+    if (ingest) this.ingestDebouncer?.schedule()
   }
 
   /** Apply queued per-path re-hashes, then recompute + re-render (the hot path). */
