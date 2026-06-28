@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.2.1...obsidian-guardian-v0.3.0) (2026-06-28)
+
+
+### Features
+
+* **plugin:** show loading spinner + disable actions during slow blesses ([adb9cdf](https://github.com/wellcaffeinated/obsidian-guardian/commit/adb9cdfbf000f627761c2e335398303ba6af1484))
+
+
+### Bug Fixes
+
+* **plugin:** re-arm ingest on content changes so deferred blesses retry ([e6e3431](https://github.com/wellcaffeinated/obsidian-guardian/commit/e6e343135b1f1f485f24e31c5a3ed92bf9454646))
+
 ## [0.2.1](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.2.0...obsidian-guardian-v0.2.1) (2026-06-15)
 
 
