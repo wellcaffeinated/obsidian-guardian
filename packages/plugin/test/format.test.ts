@@ -5,6 +5,7 @@ import {
   formatStats,
   reverseFileRow,
   shortMarker,
+  staleDiffKeys,
   toFileRow,
 } from '../src/format'
 
@@ -202,5 +203,36 @@ describe('buildPanelData', () => {
     })
     expect(errored.status).toBe('error')
     expect(errored.error).toBe('boom')
+  })
+})
+
+describe('staleDiffKeys', () => {
+  it('evicts closed rows and keeps open ones (they are re-validated in place)', () => {
+    const cached = ['__baseline__:a.md', '__baseline__:b.md', 'abc123:c.md']
+    const open = new Set(['__baseline__:b.md'])
+    expect(staleDiffKeys(cached, open)).toEqual([
+      '__baseline__:a.md',
+      'abc123:c.md',
+    ])
+  })
+
+  it('keeps nothing when no row is open', () => {
+    expect(staleDiffKeys(['x:1.md', 'y:2.md'], new Set())).toEqual([
+      'x:1.md',
+      'y:2.md',
+    ])
+  })
+
+  it('evicts nothing when every cached row is open', () => {
+    const open = new Set(['x:1.md', 'y:2.md'])
+    expect(staleDiffKeys(['x:1.md', 'y:2.md'], open)).toEqual([])
+  })
+
+  it('accepts a Map keys() iterator (the live cache shape)', () => {
+    const diffs = new Map([
+      ['x:1.md', { binary: false, lines: [] }],
+      ['y:2.md', { binary: false, lines: [] }],
+    ])
+    expect(staleDiffKeys(diffs.keys(), new Set(['y:2.md']))).toEqual(['x:1.md'])
   })
 })

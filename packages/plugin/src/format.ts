@@ -132,6 +132,27 @@ export function reverseFileRow(row: FileRow): FileRow {
   }
 }
 
+/**
+ * Cached-diff keys to drop when the working tree moves.
+ *
+ * A cached file diff is only valid for the tree it was fetched against. An
+ * *open* row is re-validated in place after a refresh (so it never flashes
+ * "Loading…"), but a **closed** row has no re-validation path — and the fetch is
+ * skipped while a key is cached, so the stale entry is what re-opening renders,
+ * beside heading stats that are recomputed from the timeline on every render.
+ * That mismatch is the bug: a `+1` heading over a diff showing far more lines.
+ */
+export function staleDiffKeys(
+  cached: Iterable<string>,
+  openKeys: ReadonlySet<string>,
+): string[] {
+  const stale: string[] = []
+  for (const key of cached) {
+    if (!openKeys.has(key)) stale.push(key)
+  }
+  return stale
+}
+
 /** Map one {@link ChangeEntry} to a {@link FileRow}. */
 export function toFileRow(change: ChangeEntry): FileRow {
   const { dir, name } = splitPath(change.path)

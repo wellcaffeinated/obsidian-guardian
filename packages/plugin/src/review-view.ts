@@ -6,7 +6,12 @@ import {
   setIcon,
   type WorkspaceLeaf,
 } from 'obsidian'
-import { type FileRow, type PanelData, reverseFileRow } from './format'
+import {
+  type FileRow,
+  type PanelData,
+  reverseFileRow,
+  staleDiffKeys,
+} from './format'
 
 /** The Obsidian view-type id for the vault-review panel (opened as a main tab). */
 export const VIEW_TYPE_REVIEW = 'obsidian-guardian-review'
@@ -173,6 +178,13 @@ export class ReviewView extends ItemView {
     // The working tree moved, so cached checkpoint→worktree diffs are stale;
     // drop them so an expanded checkpoint refetches its full per-file stats.
     this.checkpointDiffs.clear()
+    // Same for per-file diffs: every cached entry is now stale. Open rows are
+    // re-validated in place below (keeping the no-flash behaviour), but closed
+    // rows have no such path — evict them or re-opening one renders the old
+    // diff under fresh heading stats.
+    for (const key of staleDiffKeys(this.diffs.keys(), this.openFiles)) {
+      this.diffs.delete(key)
+    }
     // Re-render synchronously from the cached diffs first (so an open diff never
     // flashes back to "Loading…"), then quietly re-validate any expanded diffs
     // against the moved tree, re-rendering only if a *shown* diff actually
