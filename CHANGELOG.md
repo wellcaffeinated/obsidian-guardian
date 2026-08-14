@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.3.0...obsidian-guardian-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **plugin:** collapse History past a configurable entry count ([99c5030](https://github.com/wellcaffeinated/obsidian-guardian/commit/99c5030318d79beb53e02a9a88b5d0849230eabf))
+
+
+### Bug Fixes
+
+* **plugin:** declare isomorphic-git as a plugin dependency ([5c77dac](https://github.com/wellcaffeinated/obsidian-guardian/commit/5c77dac69300be432eb9c23698d5ef520044bdd1))
+* **plugin:** evict stale per-file diffs so heading stats match the diff body ([169b191](https://github.com/wellcaffeinated/obsidian-guardian/commit/169b1912d2c995344ededecd5bb1def08b68875d))
+
 ## [0.3.0](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.2.1...obsidian-guardian-v0.3.0) (2026-06-28)
 
 
