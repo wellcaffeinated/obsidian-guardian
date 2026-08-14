@@ -9,6 +9,7 @@ import {
 import {
   type FileRow,
   type PanelData,
+  partitionHistoryByCount,
   reverseFileRow,
   staleDiffKeys,
 } from './format'
@@ -151,6 +152,12 @@ export class ReviewView extends ItemView {
    * frozen and invited a second tap. Cleared in {@link runBusy}'s `finally`.
    */
   private busy: string | null = null
+  /**
+   * Whether History is showing entries past the count cutoff. Sticky across
+   * re-renders so a refresh doesn't re-collapse what the user just expanded.
+   * (Namespaced, not `showAll` — see the base-class collision note above.)
+   */
+  private showOlderHistory = false
 
   constructor(leaf: WorkspaceLeaf, controller: ReviewController) {
     super(leaf)
@@ -326,9 +333,36 @@ export class ReviewView extends ItemView {
     // "Live" = the most recent entry whose content equals the working tree (empty
     // restore diff). Only one entry is tagged, so a stale older twin stays plain.
     const liveIdx = entries.findIndex((e) => e.changes.length === 0)
-    for (const [i, entry] of entries.entries()) {
-      this.renderEntry(list, entry, /* live */ i === liveIdx)
+    const liveEntry = liveIdx === -1 ? null : entries[liveIdx]
+
+    // Long histories bury the entries that matter, so everything past the
+    // newest `historyLimit` collapses behind a "show older" toggle. The
+    // baseline and the live entry are pinned — the two anchors you always need
+    // reachable, however far down the list they've fallen.
+    const { recent, older } = partitionHistoryByCount(entries, {
+      limit: data.historyLimit,
+      pinned: (e) => e.isBaseline || e === liveEntry,
+    })
+
+    for (const entry of recent) {
+      this.renderEntry(list, entry, /* live */ entry === liveEntry)
     }
+    if (older.length === 0) return
+    if (this.showOlderHistory) {
+      for (const entry of older) {
+        this.renderEntry(list, entry, /* live */ entry === liveEntry)
+      }
+    }
+    const more = list.createDiv({ cls: 'og-history-more' })
+    more.createSpan({
+      text: this.showOlderHistory
+        ? 'Show fewer'
+        : `Show ${older.length} older ${older.length === 1 ? 'checkpoint' : 'checkpoints'}`,
+    })
+    more.addEventListener('click', () => {
+      this.showOlderHistory = !this.showOlderHistory
+      this.render()
+    })
   }
 
   private renderHeader(root: HTMLElement, data: PanelData): void {

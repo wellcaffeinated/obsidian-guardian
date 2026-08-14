@@ -22,6 +22,12 @@ export interface PluginSettings {
   authorEmail: string
   /** Lines of context shown around each change hunk in inline diffs. */
   diffContext: number
+  /**
+   * How many History entries to show before collapsing the rest behind a
+   * "show older" toggle. `0` disables the cutoff (show all). Purely
+   * presentational — nothing is deleted, and retention is unaffected.
+   */
+  historyLimit: number
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -32,6 +38,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   authorName: '',
   authorEmail: '',
   diffContext: 3,
+  historyLimit: 10,
 }
 
 /**

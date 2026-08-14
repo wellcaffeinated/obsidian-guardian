@@ -94,6 +94,35 @@ export interface PanelData {
   checkpoints: CheckpointRow[]
   /** Peer presence summary for the header, or null when unknown. */
   peers: { count: number; updatedAt: string | null } | null
+  /** How many History entries to show before collapsing; 0 = show everything. */
+  historyLimit: number
+}
+
+/**
+ * Split history entries into the ones to show and the ones to collapse behind a
+ * "show older" toggle, keeping the `limit` most recent.
+ *
+ * Expects `entries` already ordered newest first, so position *is* recency.
+ * `limit <= 0` disables the cutoff (everything is shown). An entry past the
+ * limit is still kept when `pinned` says so — the caller pins the baseline
+ * marker and the entry matching the working tree, which must stay reachable
+ * however far down the list they fall (so a pinned straggler shows in addition
+ * to the `limit`, never in place of one). Purely a display split: no entry is
+ * dropped, both halves are returned.
+ */
+export function partitionHistoryByCount<T>(
+  entries: readonly T[],
+  args: { limit: number; pinned?: (entry: T) => boolean },
+): { recent: T[]; older: T[] } {
+  const { limit, pinned } = args
+  if (limit <= 0) return { recent: [...entries], older: [] }
+  const recent: T[] = []
+  const older: T[] = []
+  for (const [i, entry] of entries.entries()) {
+    if (i < limit || pinned?.(entry)) recent.push(entry)
+    else older.push(entry)
+  }
+  return { recent, older }
 }
 
 /** Split a path into a `dir` prefix (ending in `/`, or '') and a `name`. */
@@ -181,8 +210,16 @@ export function buildPanelData(args: {
   /** Explicit lifecycle; defaults to `ready`/`inactive` derived from `active`. */
   status?: PanelStatus
   error?: string | null
+  /** How many History entries to show; 0 = show everything. Defaults to 0. */
+  historyLimit?: number
 }): PanelData {
-  const { active, timeline, peers = null, error = null } = args
+  const {
+    active,
+    timeline,
+    peers = null,
+    error = null,
+    historyLimit = 0,
+  } = args
   const status: PanelStatus = args.status ?? (active ? 'ready' : 'inactive')
   if (!timeline) {
     return {
@@ -193,6 +230,7 @@ export function buildPanelData(args: {
       current: [],
       checkpoints: [],
       peers,
+      historyLimit,
     }
   }
   return {
@@ -214,5 +252,6 @@ export function buildPanelData(args: {
       changes: cp.changes.map(toFileRow),
     })),
     peers,
+    historyLimit,
   }
 }

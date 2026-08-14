@@ -351,6 +351,7 @@ export default class ObsidianGuardianPlugin
       peers: this.peers,
       status: this.status,
       error: this.lastError,
+      historyLimit: this.settings.historyLimit,
     })
   }
 

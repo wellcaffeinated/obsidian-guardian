@@ -176,6 +176,18 @@
   padding-bottom: var(--size-4-1);
 }
 
+.og-history-more {
+  align-self: center;
+  padding: var(--size-4-1) var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.og-history-more:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
 .og-entry__head {
   display: flex;
   align-items: center;

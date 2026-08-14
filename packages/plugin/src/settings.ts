@@ -60,6 +60,21 @@ export class GuardianSettingTab extends PluginSettingTab {
             if (!Number.isNaN(n) && n >= 0) s.diffContext = n
           }),
       )
+
+    new Setting(containerEl)
+      .setName('History entries shown')
+      .setDesc(
+        'How many of the most recent History entries to show; the rest collapse behind a "show older" link. 0 shows everything. Display only — no checkpoint is deleted.',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('10')
+          .setValue(String(s.historyLimit))
+          .onChange((v) => {
+            const n = parseInt(v, 10)
+            if (!Number.isNaN(n) && n >= 0) s.historyLimit = n
+          }),
+      )
   }
 
   override hide(): void {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPanelData,
   formatStats,
+  partitionHistoryByCount,
   reverseFileRow,
   shortMarker,
   staleDiffKeys,
@@ -234,5 +235,52 @@ describe('staleDiffKeys', () => {
       ['y:2.md', { binary: false, lines: [] }],
     ])
     expect(staleDiffKeys(diffs.keys(), new Set(['y:2.md']))).toEqual(['x:1.md'])
+  })
+})
+
+describe('partitionHistoryByCount', () => {
+  const ids = (rows: Array<{ id: number }>) => rows.map((r) => r.id)
+  const seq = (n: number) => Array.from({ length: n }, (_, i) => ({ id: i }))
+
+  it('keeps the newest `limit` entries and collapses the rest', () => {
+    const { recent, older } = partitionHistoryByCount(seq(6), { limit: 2 })
+    expect(ids(recent)).toEqual([0, 1])
+    expect(ids(older)).toEqual([2, 3, 4, 5])
+  })
+
+  it('collapses nothing when the list is at or under the limit', () => {
+    const { recent, older } = partitionHistoryByCount(seq(3), { limit: 10 })
+    expect(ids(recent)).toEqual([0, 1, 2])
+    expect(older).toEqual([])
+  })
+
+  it('treats limit <= 0 as "no cutoff"', () => {
+    for (const limit of [0, -1]) {
+      const { recent, older } = partitionHistoryByCount(seq(5), { limit })
+      expect(recent).toHaveLength(5)
+      expect(older).toEqual([])
+    }
+  })
+
+  it('keeps pinned entries past the limit, in addition to it', () => {
+    const entries = [
+      { id: 0, isBaseline: false },
+      { id: 1, isBaseline: false },
+      { id: 2, isBaseline: false },
+      { id: 3, isBaseline: true },
+      { id: 4, isBaseline: false },
+    ]
+    const { recent, older } = partitionHistoryByCount(entries, {
+      limit: 2,
+      pinned: (e) => e.isBaseline,
+    })
+    // The pin is additive: two newest PLUS the pinned straggler.
+    expect(ids(recent)).toEqual([0, 1, 3])
+    expect(ids(older)).toEqual([2, 4])
+  })
+
+  it('loses nothing — the two halves always cover the input', () => {
+    const { recent, older } = partitionHistoryByCount(seq(7), { limit: 3 })
+    expect(recent.length + older.length).toBe(7)
   })
 })
