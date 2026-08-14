@@ -15,6 +15,7 @@
     "@isomorphic-git/lightning-fs": "^4.6.2",
     "@obsidian-guardian/engine": "workspace:*",
     "buffer": "^6.0.3",
+    "isomorphic-git": "^1.27.1",
     "pathe": "^2.0.3"
   },
   "devDependencies": {
