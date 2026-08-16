@@ -79,14 +79,30 @@ scripts/    headless-Obsidian smoke + screenshot helpers
 - `pnpm build` · `pnpm test` · `pnpm typecheck` · `pnpm lint` · `pnpm format` ·
   `pnpm knip` (root = all packages; per-pkg via
   `pnpm --filter @obsidian-guardian/<pkg> <script>`).
+- `pnpm lint:obsidian` — the second, narrow linter: `eslint-plugin-obsidianmd`
+  over `packages/plugin` only, for rules that know the `obsidian` API surface
+  (Node builtins on mobile, `minAppVersion` vs the APIs used, hardcoded
+  `.obsidian`, …). Biome still owns general hygiene and all formatting; the
+  overlap is switched off in `packages/plugin/eslint.config.js`, where every
+  exemption carries its reason. Runs with `--max-warnings 0`.
+- `pnpm install:vault <path-or-name>` — build and drop `dist/` into a vault you
+  manage, then reload it (scoped to that vault by name). The fast manual loop;
+  `pnpm test:plugin` remains the rigorous one.
 - `pnpm test:plugin` — full plugin smoke in the headless container. **Needs docker.**
 - `pnpm screenshot:plugin [out.png]` / `pnpm shot:stub` — build + load the plugin
   in headless Obsidian and capture the panel (the `shot:stub` variant uses an
   overlay workaround for Obsidian deferred views). **Needs docker.**
 
 The merge gate is: `pnpm -r test`, `pnpm -r typecheck`, `pnpm lint` (one
-pre-existing CSS specificity _warning_ is acceptable), `pnpm knip`, engine +
-plugin builds, and `pnpm test:plugin` all green.
+pre-existing CSS specificity _warning_ is acceptable), `pnpm lint:obsidian`,
+`pnpm knip`, engine + plugin builds, and `pnpm test:plugin` all green.
+
+`.github/workflows/ci.yml` runs all of that on every push and PR **except**
+`pnpm test:plugin`, which needs a docker daemon and a headless-Obsidian image —
+run it locally before merging. Git hooks (husky, installed by `pnpm install`)
+catch two things earlier: `commit-msg` rejects a non-Conventional-Commits
+subject (release-please would otherwise miscategorise it silently), and
+`pre-commit` runs Biome over staged files without rewriting them.
 
 ## Conventions
 

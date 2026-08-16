@@ -62,6 +62,10 @@ already exist, so this is an additive trigger, not new core.
       session on the first `touch`/`rescan`; persisting it skips the first full
       hash on load.
 - [ ] **Diff context capping for very large files** in the inline per-file diff.
+- [ ] **Adopt Obsidian 1.13's declarative settings API** (`getSettingDefinitions`
+      on the settings tab) so our settings show up in Obsidian's settings search.
+      Surfaced by `eslint-plugin-obsidianmd`; its rule
+      (`settings-tab/prefer-setting-definitions`) is switched off until then.
 
 ## Test coverage
 
