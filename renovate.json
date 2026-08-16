@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "semanticCommitType": "deps",
+  "timezone": "America/Toronto",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 3,
+  "minimumReleaseAge": "7 days",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "One PR for all non-major bumps — they're reviewed as a batch.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "The Obsidian typings track the app, which ships often; keep them separate so a typing bump is never buried in a batch.",
+      "matchPackageNames": ["obsidian"],
+      "groupName": "obsidian typings"
+    },
+    {
+      "description": "isomorphic-git backs the object store on both platforms — never batch it, and never take a same-week release.",
+      "matchPackageNames": ["isomorphic-git", "@isomorphic-git/lightning-fs"],
+      "groupName": "isomorphic-git",
+      "minimumReleaseAge": "21 days"
+    }
+  ]
+}

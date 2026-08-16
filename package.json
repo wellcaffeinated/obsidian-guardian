@@ -9,16 +9,20 @@
     "dev": "pnpm -r --parallel dev",
     "test": "pnpm -r test",
     "test:plugin": "bash scripts/smoke-plugin.sh",
+    "install:vault": "bash scripts/install-vault.sh",
     "screenshot:plugin": "bash scripts/screenshot-plugin.sh",
     "shot:stub": "bash scripts/shot-stub.sh",
     "profile:timeline": "bash scripts/profile-timeline.sh",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
+    "lint:obsidian": "pnpm --filter @obsidian-guardian/plugin lint:obsidian",
     "format": "biome format . --write",
-    "knip": "knip"
+    "knip": "knip",
+    "prepare": "husky || true"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
+    "husky": "^9.1.7",
     "knip": "^6.5.0",
     "typescript": "^6.0.3"
   },
