@@ -8,32 +8,52 @@ import {
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
+/** The default Obsidian config folder; the vault reports its real one at runtime. */
+const CONFIG_DIR = '.obsidian'
+
 describe('shouldIgnorePath', () => {
   it('ignores the review folder and its contents', () => {
-    expect(shouldIgnorePath('_OG', '_OG')).toBe(true)
-    expect(shouldIgnorePath('_OG/changes-abc.md', '_OG')).toBe(true)
+    expect(shouldIgnorePath('_OG', '_OG', CONFIG_DIR)).toBe(true)
+    expect(shouldIgnorePath('_OG/changes-abc.md', '_OG', CONFIG_DIR)).toBe(true)
   })
-  it('ignores .obsidian config', () => {
-    expect(shouldIgnorePath('.obsidian', '_OG')).toBe(true)
-    expect(shouldIgnorePath('.obsidian/workspace.json', '_OG')).toBe(true)
+  it('ignores the config folder', () => {
+    expect(shouldIgnorePath('.obsidian', '_OG', CONFIG_DIR)).toBe(true)
+    expect(
+      shouldIgnorePath('.obsidian/workspace.json', '_OG', CONFIG_DIR),
+    ).toBe(true)
   })
   it('does not ignore ordinary notes', () => {
-    expect(shouldIgnorePath('notes/a.md', '_OG')).toBe(false)
-    expect(shouldIgnorePath('_OG-not-the-folder.md', '_OG')).toBe(false)
+    expect(shouldIgnorePath('notes/a.md', '_OG', CONFIG_DIR)).toBe(false)
+    expect(shouldIgnorePath('_OG-not-the-folder.md', '_OG', CONFIG_DIR)).toBe(
+      false,
+    )
   })
   it('respects a custom review folder', () => {
-    expect(shouldIgnorePath('Review/changes.md', 'Review')).toBe(true)
-    expect(shouldIgnorePath('_OG/changes.md', 'Review')).toBe(false)
+    expect(shouldIgnorePath('Review/changes.md', 'Review', CONFIG_DIR)).toBe(
+      true,
+    )
+    expect(shouldIgnorePath('_OG/changes.md', 'Review', CONFIG_DIR)).toBe(false)
+  })
+  it('follows a renamed config folder, and only that one', () => {
+    // Obsidian lets the user rename the config folder. Assuming `.obsidian`
+    // would both miss the real one (endless refreshes on workspace writes) and
+    // ignore a note folder that merely shares the default name.
+    expect(shouldIgnorePath('.config/workspace.json', '_OG', '.config')).toBe(
+      true,
+    )
+    expect(shouldIgnorePath('.obsidian/note.md', '_OG', '.config')).toBe(false)
   })
 })
 
 describe('planVaultReaction', () => {
   it('treats a sync-folder change as a peer signal: ingest only', () => {
-    expect(planVaultReaction('_OG/sync/bless-abc.json', '_OG')).toEqual({
+    expect(
+      planVaultReaction('_OG/sync/bless-abc.json', '_OG', CONFIG_DIR),
+    ).toEqual({
       touchPaths: [],
       ingest: true,
     })
-    expect(planVaultReaction('_OG/sync', '_OG')).toEqual({
+    expect(planVaultReaction('_OG/sync', '_OG', CONFIG_DIR)).toEqual({
       touchPaths: [],
       ingest: true,
     })
@@ -44,26 +64,30 @@ describe('planVaultReaction', () => {
     // that synced ahead of its bytes is deferred; the bytes arriving later are a
     // plain content event. If that event did not re-arm ingest (the pre-fix
     // behavior), the baseline would stay stuck on mobile. `ingest` MUST be true.
-    expect(planVaultReaction('notes/a.md', '_OG')).toEqual({
+    expect(planVaultReaction('notes/a.md', '_OG', CONFIG_DIR)).toEqual({
       touchPaths: ['notes/a.md'],
       ingest: true,
     })
   })
 
   it('includes both paths on a rename and still re-arms ingest', () => {
-    expect(planVaultReaction('notes/new.md', '_OG', 'notes/old.md')).toEqual({
+    expect(
+      planVaultReaction('notes/new.md', '_OG', CONFIG_DIR, 'notes/old.md'),
+    ).toEqual({
       touchPaths: ['notes/new.md', 'notes/old.md'],
       ingest: true,
     })
   })
 
   it('does nothing for an ignored path (no touch, no ingest)', () => {
-    expect(planVaultReaction('.obsidian/workspace.json', '_OG')).toEqual({
+    expect(
+      planVaultReaction('.obsidian/workspace.json', '_OG', CONFIG_DIR),
+    ).toEqual({
       touchPaths: [],
       ingest: false,
     })
     // A non-sync path inside the review folder is ignored entirely.
-    expect(planVaultReaction('_OG/state.json', '_OG')).toEqual({
+    expect(planVaultReaction('_OG/state.json', '_OG', CONFIG_DIR)).toEqual({
       touchPaths: [],
       ingest: false,
     })

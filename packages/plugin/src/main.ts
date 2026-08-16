@@ -320,6 +320,7 @@ export default class ObsidianGuardianPlugin
     const { touchPaths, ingest } = planVaultReaction(
       path,
       this.config.reviewFolder,
+      this.app.vault.configDir,
       oldPath,
     )
     for (const p of touchPaths) this.pendingTouches.add(p)
