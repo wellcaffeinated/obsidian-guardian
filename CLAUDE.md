@@ -106,6 +106,10 @@ catch two things earlier: `commit-msg` rejects a non-Conventional-Commits
 subject (release-please would otherwise miscategorise it silently), and
 `pre-commit` runs Biome over staged files without rewriting them.
 
+Node and pnpm are pinned in `mise.toml` (`mise install`), which CI reads via
+`node-version-file` — so the pin lives in one place and never says a version
+twice.
+
 ## Conventions
 
 - **pnpm** (not npm/yarn/bun). **tsdown** bundler · **Vitest** · **Biome**

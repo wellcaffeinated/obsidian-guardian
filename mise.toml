@@ -1,0 +1,5 @@
+# Pin the toolchain with the repo, so "works on my machine" isn't a variable.
+# `mise install` gets you exactly what CI uses (see .github/workflows/ci.yml).
+[tools]
+node = "24"
+pnpm = "11"

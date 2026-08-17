@@ -26,6 +26,17 @@
       "matchPackageNames": ["isomorphic-git", "@isomorphic-git/lightning-fs"],
       "groupName": "isomorphic-git",
       "minimumReleaseAge": "21 days"
+    },
+    {
+      "description": "The toolchain lives in two files — mise.toml (what you and CI install) and package.json's packageManager (what a pnpm run actually uses). Group them so they can never land half-updated.",
+      "matchFileNames": ["mise.toml", "package.json"],
+      "matchDepNames": ["node", "pnpm"],
+      "groupName": "toolchain (node, pnpm)"
+    },
+    {
+      "description": "Node's own versioning scheme treats non-LTS lines as unstable, so this keeps us on LTS instead of jumping to Current the week it ships.",
+      "matchDepNames": ["node"],
+      "versioning": "node"
     }
   ]
 }

@@ -24,7 +24,7 @@
     "eslint": "^9.39.5",
     "eslint-plugin-obsidianmd": "^0.4.1",
     "fake-indexeddb": "^6.2.5",
-    "obsidian": "latest",
+    "obsidian": "^1.13.0",
     "tsdown": "^0.21.9",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.67.0",
