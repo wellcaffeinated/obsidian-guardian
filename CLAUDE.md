@@ -87,7 +87,9 @@ scripts/    headless-Obsidian smoke + screenshot helpers
   exemption carries its reason. Runs with `--max-warnings 0`.
 - `pnpm install:vault <path-or-name>` — build and drop `dist/` into a vault you
   manage, then reload it (scoped to that vault by name). The fast manual loop;
-  `pnpm test:plugin` remains the rigorous one.
+  `pnpm test:plugin` remains the rigorous one. It refuses to create the vault or
+  its config dir — a missing one means a typo or a vault not mounted/synced on
+  this machine, and creating it would leave a build nothing ever loads.
 - `pnpm test:plugin` — full plugin smoke in the headless container. **Needs docker.**
 - `pnpm screenshot:plugin [out.png]` / `pnpm shot:stub` — build + load the plugin
   in headless Obsidian and capture the panel (the `shot:stub` variant uses an

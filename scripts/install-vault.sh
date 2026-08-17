@@ -39,7 +39,8 @@ VAULT_NAME=""
 if [ ! -d "$TARGET" ] && [ "${TARGET#*/}" = "$TARGET" ]; then
   command -v obsidian >/dev/null 2>&1 ||
     fail "'$TARGET' is not a directory and the obsidian CLI isn't on PATH to resolve it as a vault name"
-  RESOLVED="$(obsidian vaults verbose 2>/dev/null | awk -F'\t' -v n="$TARGET" '$1 == n {print $2; exit}')"
+  # `|| true`: under `pipefail` a CLI that can't list vaults aborts silently.
+  RESOLVED="$(obsidian vaults verbose 2>/dev/null | awk -F'\t' -v n="$TARGET" '$1 == n {print $2; exit}' || true)"
   [ -n "$RESOLVED" ] || fail "no vault named '$TARGET' (try: obsidian vaults)"
   log "resolved vault '$TARGET' → $RESOLVED"
   VAULT_NAME="$TARGET"
@@ -47,14 +48,19 @@ if [ ! -d "$TARGET" ] && [ "${TARGET#*/}" = "$TARGET" ]; then
 elif command -v obsidian >/dev/null 2>&1; then
   # Given a path: reverse-lookup its name so the reload can be scoped to it.
   ABS="$(cd "$TARGET" 2>/dev/null && pwd || true)"
-  [ -n "$ABS" ] &&
-    VAULT_NAME="$(obsidian vaults verbose 2>/dev/null | awk -F'\t' -v p="$ABS" '$2 == p {print $1; exit}')"
+  if [ -n "$ABS" ]; then
+    VAULT_NAME="$(obsidian vaults verbose 2>/dev/null | awk -F'\t' -v p="$ABS" '$2 == p {print $1; exit}' || true)"
+  fi
 fi
 
-[ -d "$TARGET" ] || fail "not a directory: $TARGET"
+# Both are refusals, never a mkdir: a vault this machine can't reach (unmounted,
+# not yet synced) or a typo'd path looks exactly like an empty tree, and creating
+# one leaves a build no Obsidian ever loads.
+[ -d "$TARGET" ] || fail "not a directory: $TARGET — is the vault mounted/synced on this machine?"
 [ -d "$TARGET/$CONFIG_DIR" ] ||
-  fail "no $CONFIG_DIR/ in $TARGET — that isn't a vault (override the name with OG_CONFIG_DIR)"
+  fail "no $CONFIG_DIR/ in $TARGET — not a vault, or not fully synced here (override the name with OG_CONFIG_DIR)"
 
+# Only the plugin's own dir is ours to create.
 DEST="$TARGET/$CONFIG_DIR/plugins/$PLUGIN_ID"
 
 log "build the plugin"
