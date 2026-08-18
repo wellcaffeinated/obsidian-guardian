@@ -106,9 +106,11 @@ catch two things earlier: `commit-msg` rejects a non-Conventional-Commits
 subject (release-please would otherwise miscategorise it silently), and
 `pre-commit` runs Biome over staged files without rewriting them.
 
-Node and pnpm are pinned in `mise.toml` (`mise install`), which CI reads via
-`node-version-file` — so the pin lives in one place and never says a version
-twice.
+Node and pnpm are pinned in `mise.toml` (`mise install`); CI installs the same
+toolchain with `jdx/mise-action`, so the pin lives in one place. Don't reach for
+`actions/setup-node` with `node-version-file: mise.toml` — setup-node only
+parses `.nvmrc` / `.node-version` / `.tool-versions` / `package.json`, and takes
+mise.toml's first line as the version instead of failing loudly.
 
 ## Conventions
 
