@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.1](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.4.0...obsidian-guardian-v0.4.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* **ci:** install the toolchain with mise instead of setup-node ([81cbce2](https://github.com/wellcaffeinated/obsidian-guardian/commit/81cbce24966ebc312d16819e6d5032c07c825a35))
+* **plugin:** correct minAppVersion and follow the vault config dir ([c27da0e](https://github.com/wellcaffeinated/obsidian-guardian/commit/c27da0e5a11e3f04e29aad93e6766516abd07cc1))
+* **scripts:** refuse to install into a vault that isn't there ([cdf415a](https://github.com/wellcaffeinated/obsidian-guardian/commit/cdf415a970950db07d0f6818be2bc94bde93e9bc))
+
 ## [0.4.0](https://github.com/wellcaffeinated/obsidian-guardian/compare/obsidian-guardian-v0.3.0...obsidian-guardian-v0.4.0) (2026-08-14)
 
 
