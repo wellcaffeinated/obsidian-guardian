@@ -1,0 +1,8 @@
+# Format + lint the staged files only — fast enough to run on every commit.
+#
+# Deliberately does NOT rewrite files: an auto-fix that runs after `git add`
+# either commits unstaged edits or silently drops them. Fail loudly instead and
+# let `pnpm format` do the writing.
+#
+# This is a fast pre-filter, not the merge gate — CI runs the full gate.
+pnpm biome check --staged --no-errors-on-unmatched

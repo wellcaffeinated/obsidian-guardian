@@ -1,0 +1,35 @@
+# The merge gate, enforced. Mirrors the gate documented in CLAUDE.md, minus
+# `pnpm test:plugin` — that boots a real headless-Obsidian container and is run
+# locally before merge (see CLAUDE.md → Testing the plugin).
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # mise.toml is the single toolchain pin (node + pnpm). Install it with
+      # mise rather than setup-node: setup-node's node-version-file only parses
+      # .nvmrc / .node-version / .tool-versions / package.json, and silently
+      # reads mise.toml's first line as the version. mise-action caches the
+      # installed tools itself; the pnpm store is cached separately below.
+      - uses: jdx/mise-action@v4
+      - name: Locate the pnpm store
+        run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      # Obsidian-API-specific rules (vault.delete vs trashFile, etc.) that Biome
+      # can't know about. Scoped to the plugin package.
+      - run: pnpm lint:obsidian
+      - run: pnpm knip --max-issues 0
+      - run: pnpm build
+      - run: pnpm test

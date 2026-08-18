@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "semanticCommitType": "deps",
+  "timezone": "America/Toronto",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 3,
+  "minimumReleaseAge": "7 days",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "One PR for all non-major bumps — they're reviewed as a batch.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "The Obsidian typings track the app, which ships often; keep them separate so a typing bump is never buried in a batch.",
+      "matchPackageNames": ["obsidian"],
+      "groupName": "obsidian typings"
+    },
+    {
+      "description": "isomorphic-git backs the object store on both platforms — never batch it, and never take a same-week release.",
+      "matchPackageNames": ["isomorphic-git", "@isomorphic-git/lightning-fs"],
+      "groupName": "isomorphic-git",
+      "minimumReleaseAge": "21 days"
+    },
+    {
+      "description": "The toolchain lives in two files — mise.toml (what you and CI install) and package.json's packageManager (what a pnpm run actually uses). Group them so they can never land half-updated.",
+      "matchFileNames": ["mise.toml", "package.json"],
+      "matchDepNames": ["node", "pnpm"],
+      "groupName": "toolchain (node, pnpm)"
+    },
+    {
+      "description": "Node's own versioning scheme treats non-LTS lines as unstable, so this keeps us on LTS instead of jumping to Current the week it ships.",
+      "matchDepNames": ["node"],
+      "versioning": "node"
+    }
+  ]
+}

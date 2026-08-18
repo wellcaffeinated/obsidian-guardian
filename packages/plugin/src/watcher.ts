@@ -33,12 +33,21 @@ export function createSerializedRefresh(
 
 /**
  * True for vault paths the watcher must never react to. Rendering the review
- * note writes under `reviewFolder`; reacting to that would refresh forever.
- * `.obsidian` (workspace/plugin state) is likewise irrelevant to the review.
+ * note writes under `reviewFolder`; reacting to that would refresh forever. The
+ * config folder (workspace/plugin state) is likewise irrelevant to the review.
+ *
+ * `configDir` is passed in rather than assumed to be `.obsidian`: Obsidian lets
+ * the user rename it, and on a renamed vault a hardcoded name would both miss
+ * the real config folder (endless refreshes on workspace writes) and ignore a
+ * real note folder that happened to be called `.obsidian`.
  */
-export function shouldIgnorePath(path: string, reviewFolder: string): boolean {
+export function shouldIgnorePath(
+  path: string,
+  reviewFolder: string,
+  configDir: string,
+): boolean {
   if (path === reviewFolder || path.startsWith(`${reviewFolder}/`)) return true
-  if (path === '.obsidian' || path.startsWith('.obsidian/')) return true
+  if (path === configDir || path.startsWith(`${configDir}/`)) return true
   return false
 }
 
@@ -62,11 +71,12 @@ export interface VaultReaction {
  *   re-arming ingest here the obligation would never retry and the baseline would
  *   stay stuck until some unrelated future signal. A no-op ingest doesn't
  *   republish, so re-arming on every content change is cheap.
- * - An ignored path (the review folder, `.obsidian`) ⇒ do nothing.
+ * - An ignored path (the review folder, the vault's config folder) ⇒ do nothing.
  */
 export function planVaultReaction(
   path: string,
   reviewFolder: string,
+  configDir: string,
   oldPath?: string,
 ): VaultReaction {
   const syncDir = `${reviewFolder}/sync`
@@ -74,8 +84,8 @@ export function planVaultReaction(
     return { touchPaths: [], ingest: true }
   }
   const touchPaths: string[] = []
-  if (!shouldIgnorePath(path, reviewFolder)) touchPaths.push(path)
-  if (oldPath && !shouldIgnorePath(oldPath, reviewFolder)) {
+  if (!shouldIgnorePath(path, reviewFolder, configDir)) touchPaths.push(path)
+  if (oldPath && !shouldIgnorePath(oldPath, reviewFolder, configDir)) {
     touchPaths.push(oldPath)
   }
   return { touchPaths, ingest: touchPaths.length > 0 }

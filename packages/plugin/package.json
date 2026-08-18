@@ -8,6 +8,7 @@
     "dev": "tsdown --watch",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
+    "lint:obsidian": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -20,10 +21,13 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.4.1",
     "fake-indexeddb": "^6.2.5",
-    "obsidian": "latest",
+    "obsidian": "^1.13.0",
     "tsdown": "^0.21.9",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.4"
   }
 }
